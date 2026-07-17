@@ -8,7 +8,7 @@ Write-Host "Git Sync Started"
 Write-Host "Message: $CommitMessage"
 Write-Host ""
 
-git pull
+git pull origin main
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Pull failed. Resolve conflicts and try again."
@@ -31,7 +31,7 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-git push
+git push origin main
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Push failed."
