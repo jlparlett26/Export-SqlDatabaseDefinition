@@ -1,11 +1,29 @@
 # GitSync.ps1
 # Pull -> Add -> Commit -> Push
 
-$CommitMessage = Get-Date -Format "yyyy-MM-dd hh:mm:ss tt"
+# Get the timestamp that will be used when no custom description is provided.
+$Timestamp = Get-Date -Format "yyyy-MM-dd hh:mm:ss tt"
 
+# Prompt for an optional commit description.
+$UserDescription = Read-Host "Enter commit description (blank for timestamp only)"
+
+# Trim whitespace and treat blank input as empty.
+if ($null -ne $UserDescription) {
+    $UserDescription = $UserDescription.Trim()
+}
+
+# Construct the final commit message.
+if ([string]::IsNullOrWhiteSpace($UserDescription)) {
+    $CommitMessage = $Timestamp
+}
+else {
+    $CommitMessage = "$UserDescription - $Timestamp"
+}
+
+# Display the final commit message before the existing workflow continues.
 Write-Host ""
 Write-Host "Git Sync Started"
-Write-Host "Message: $CommitMessage"
+Write-Host "Commit Message: $CommitMessage"
 Write-Host ""
 
 git pull origin main
