@@ -1,0 +1,508 @@
+
+SQL DATABASE EXPORTER PROJECT PLAN
+==================================
+
+Project Goal
+------------
+Build an opinionated PowerShell tool:
+
+    Export-SqlDatabaseDefinition
+
+that:
+
+- Exports a SQL Server database into a standardized folder structure
+- Uses a YAML configuration file
+- Produces Git-friendly output
+- Exports security information
+- Generates dependency documentation
+- Creates a visual dependency map from sys.sql_expression_dependencies
+
+This is NOT an SSMS Generate Scripts clone.
+This is a Database-to-Folder Exporter with dependency documentation.
+
+==================================================================
+
+PHASE 1 - STANDARD EXPORT STRUCTURE
+===================================
+
+[ ] Step 1 - Lock down the folder structure
+
+DatabaseName
+│
+├── export.yaml
+├── exportinfo.json
+├── export.log
+│
+├── Database
+├── Schemas
+├── Tables
+├── Views
+├── StoredProcedures
+├── Functions
+├── Triggers
+├── Synonyms
+├── Sequences
+├── Security
+├── ReferenceData
+└── Dependencies
+
+==================================================================
+
+PHASE 2 - YAML CONFIGURATION
+============================
+
+[ ] Step 2 - Create export.yaml automatically
+
+If export.yaml does not exist:
+
+    Create default export.yaml
+    Exit
+    Tell user to review and rerun
+
+This becomes the standard configuration used 99.9% of the time.
+
+[ ] Step 3 - Add dependency settings to YAML
+
+Settings should control:
+
+- Dependency export enabled/disabled
+- Include cross-database references
+- Include cross-server references
+- CSV output
+- JSON output
+- DOT output
+- SVG output
+- HTML report output
+
+==================================================================
+
+PHASE 3 - CONNECTION STRATEGY
+=============================
+
+[ ] Step 4 - Support SSMS launching
+
+Preferred workflow:
+
+    Open SSMS
+    Connect to server
+    Select database
+    Run Exporter
+
+Avoid requiring:
+
+    -Server
+    -Database
+
+for normal use.
+
+Support explicit parameters for automation later.
+
+==================================================================
+
+PHASE 4 - METADATA AND LOGGING
+==============================
+
+[ ] Step 5 - Create exportinfo.json
+
+Store:
+
+- Server
+- Database
+- Export date/time
+- Tool version
+- Profile name
+
+[ ] Step 6 - Create export.log
+
+Log:
+
+- Start time
+- Configuration loaded
+- Objects exported
+- Dependency analysis completed
+- Warnings
+- Errors
+- Completion status
+
+==================================================================
+
+PHASE 5 - CORE OBJECT EXPORT
+============================
+
+[ ] Step 7 - Export Schemas
+
+[ ] Step 8 - Export Tables
+
+One file per object
+
+Example:
+
+    Tables\
+        dbo.Customer.sql
+        dbo.Order.sql
+
+[ ] Step 9 - Export Views
+
+Example:
+
+    Views\
+        dbo.vActiveStudents.sql
+
+[ ] Step 10 - Export Stored Procedures
+
+Example:
+
+    StoredProcedures\
+        dbo.usp_LoadSecurity.sql
+
+[ ] Step 11 - Export Functions
+
+Example:
+
+    Functions\
+        dbo.fn_GetTermCode.sql
+
+[ ] Step 12 - Export Triggers, Synonyms, and Sequences
+
+==================================================================
+
+PHASE 6 - SECURITY EXPORT
+=========================
+
+[ ] Step 13 - Export Roles
+
+    Security\
+        Roles.sql
+
+[ ] Step 14 - Export Users
+
+    Security\
+        Users.sql
+
+[ ] Step 15 - Export Permissions
+
+    Security\
+        Permissions.sql
+
+This will be particularly useful during migrations.
+
+==================================================================
+
+PHASE 7 - DEPENDENCY DATA EXPORT
+================================
+
+[ ] Step 16 - Query sys.sql_expression_dependencies
+
+Capture:
+
+- Referencing object
+- Referencing schema
+- Referencing type
+- Referenced server
+- Referenced database
+- Referenced schema
+- Referenced object
+- Schema-bound flag
+- Caller-dependent flag
+- Ambiguous flag
+
+[ ] Step 17 - Export dependencies.csv
+
+    Dependencies\
+        dependencies.csv
+
+Purpose:
+
+- Easy Excel analysis
+- Easy filtering
+- Troubleshooting
+
+[ ] Step 18 - Export dependencies.json
+
+    Dependencies\
+        dependencies.json
+
+Purpose:
+
+- Future automation
+- Comparisons
+- Reporting
+
+==================================================================
+
+PHASE 8 - VISUAL DEPENDENCY OUTPUT
+==================================
+
+[ ] Step 19 - Generate Graphviz DOT file
+
+    Dependencies\
+        dependencies.dot
+
+DOT becomes the master visual source.
+
+[ ] Step 20 - Generate SVG dependency map
+
+    Dependencies\
+        dependencies.svg
+
+SVG Advantages:
+
+- Browser friendly
+- Git friendly
+- Scalable
+- Easy to document
+
+[ ] Step 21 - Generate HTML dependency report
+
+    Dependencies\
+        dependencies.html
+
+Include:
+
+- Dependency map
+- Cross-database references
+- Cross-server references
+- Ambiguous references
+- Caller-dependent references
+- Orphaned objects
+
+==================================================================
+
+PHASE 9 - DEPENDENCY VISUALIZATION RULES
+========================================
+
+[ ] Step 22 - Keep Visualization Simple Initially
+
+Version 1:
+
+    Referencing Object --> Referenced Object
+
+Example:
+
+    dbo.vStudentSummary -> dbo.Student
+    dbo.usp_LoadSecurity -> dbo.SecurityRole
+
+[ ] Step 23 - Color-code later
+
+Possible future enhancement:
+
+- Tables = Blue
+- Views = Green
+- Procedures = Orange
+- Functions = Purple
+- External references = Red
+
+[ ] Step 24 - Handle external references separately
+
+Identify:
+
+- Cross-database references
+- Cross-server references
+
+These are often migration risks.
+
+[ ] Step 25 - Create dependency-warning report
+
+    Dependencies\
+        dependency-warnings.md
+
+Include:
+
+- Ambiguous references
+- Caller-dependent references
+- Cross-database references
+- Cross-server references
+- Unresolved objects
+
+==================================================================
+
+PHASE 10 - REFERENCE DATA
+=========================
+
+[ ] Step 26 - Export reference data
+
+Controlled by YAML.
+
+Use mainly for:
+
+- StateCodes
+- Campuses
+- Security roles
+- Other lookup tables
+
+Keep this optional.
+
+==================================================================
+
+PHASE 11 - PROFILES
+===================
+
+[ ] Step 27 - Add named profiles
+
+Examples:
+
+- Standard
+- SchemaOnly
+- SecurityAudit
+- DependencyMapOnly
+- ReferenceDataOnly
+- MigrationReview
+
+Most exports should stay:
+
+    profile: Standard
+
+==================================================================
+
+PHASE 12 - GIT FRIENDLY OUTPUT
+==============================
+
+[ ] Step 28 - Make output deterministic
+
+Same database should generate:
+
+- Same file names
+- Same ordering
+- Same folder structure
+- Repeatable output
+
+Goal:
+
+    git diff
+
+shows real changes only.
+
+[ ] Step 29 - Add git status summary
+
+Future enhancement:
+
+- Changed files
+- New files
+- Deleted files
+
+No automatic commits initially.
+
+==================================================================
+
+DEVELOPMENT SPRINTS
+===================
+
+Sprint 1 - Skeleton
+
+[ ] Create Export-SqlDatabaseDefinition
+[ ] Create output folder
+[ ] Create default export.yaml if missing
+[ ] Load YAML
+[ ] Create exportinfo.json
+[ ] Create export.log
+
+Sprint 2 - Core Export
+
+[ ] Connect to SQL Server
+[ ] Export schemas
+[ ] Export tables
+[ ] Export views
+[ ] Export stored procedures
+[ ] Export functions
+
+Sprint 3 - Dependency Data
+
+[ ] Query sys.sql_expression_dependencies
+[ ] Export CSV
+[ ] Export JSON
+[ ] Add dependency warnings
+
+Sprint 4 - Dependency Visuals
+
+[ ] Generate DOT file
+[ ] Generate SVG graph
+[ ] Generate HTML report
+
+Sprint 5 - Security
+
+[ ] Export roles
+[ ] Export users
+[ ] Export permissions
+
+Sprint 6 - SSMS Integration
+
+[ ] Launch from SSMS
+[ ] Use current server
+[ ] Use current database
+[ ] Allow parameter overrides
+
+Sprint 7 - Reference Data
+
+[ ] Export lookup tables
+[ ] YAML-controlled selection
+
+Sprint 8 - Polish
+
+[ ] Profiles
+[ ] Config upgrades
+[ ] Git integration
+[ ] Dependency filtering
+[ ] Large graph handling
+
+==================================================================
+
+MVP (MINIMUM VIABLE PRODUCT)
+============================
+
+The first release is complete when it can:
+
+[ ] Create export.yaml automatically
+[ ] Load configuration
+[ ] Export objects into folders
+[ ] Export security
+[ ] Generate export metadata
+[ ] Generate export log
+[ ] Export dependency data
+[ ] Generate dependency visualization
+
+Final Output Example:
+
+BannerProd
+│
+├── export.yaml
+├── exportinfo.json
+├── export.log
+│
+├── Tables
+├── Views
+├── StoredProcedures
+├── Functions
+└── Dependencies
+    ├── dependencies.csv
+    ├── dependencies.json
+    ├── dependencies.dot
+    ├── dependencies.svg
+    └── dependencies.html
+	
+	
+SSMS "Generate Scripts" does much more than people realize:
+
+Tables
+Views
+Stored procedures
+Functions
+Triggers
+Schemas
+Users
+Roles
+Synonyms
+Sequences
+Indexes
+Constraints
+Extended properties
+Agent jobs (separate object model)
+
+
+Database
+│
+├── Tables
+├── Views
+├── Procedures
+├── Functions
+├── Security
+└── ReferenceData
