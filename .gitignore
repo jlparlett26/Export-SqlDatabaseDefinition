@@ -1,0 +1,23 @@
+# VS Code
+.vscode/
+
+# PowerShell
+*.ps1xml
+
+# Build artifacts
+bin/
+obj/
+
+# Logs
+*.log
+
+# User-specific files
+*.user
+
+# OS files
+Thumbs.db
+Desktop.ini
+
+# Temporary exports
+temp/
+output/
