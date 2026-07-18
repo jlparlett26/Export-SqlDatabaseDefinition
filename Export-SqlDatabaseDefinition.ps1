@@ -291,13 +291,6 @@ function Read-ExportProfile {
         $rawContent = [System.IO.File]::ReadAllText($resolvedPath, [System.Text.UTF8Encoding]::new($false))
         $profile = ConvertFrom-Yaml -Yaml $rawContent
 
-        # Debugging output for profile type and members
-        Write-Host "PROFILE TYPE:"
-        Write-Host $profile.GetType().FullName
-
-        Write-Host "PROFILE MEMBERS:"
-        $profile | Get-Member
-
         if ($null -eq $profile) {
             throw [System.InvalidOperationException]::new('The YAML document is empty.')
         }
@@ -339,18 +332,18 @@ function Read-ExportProfile {
 
         foreach ($sectionName in $requiredSections.Keys) {
             if (-not $profile.Contains($sectionName)) {
-                $errors.Add(("Missing top-level section '{0}'." -f $sectionName))
+                $errors.Add(("Missing section: {0}" -f $sectionName))
                 continue
             }
 
             $sectionValue = $profile[$sectionName]
             if ($null -eq $sectionValue) {
-                $errors.Add(("Top-level section '{0}' is null." -f $sectionName))
+                $errors.Add(("Section '{0}' is null." -f $sectionName))
                 continue
             }
 
             if (-not ($sectionValue -is [System.Collections.IDictionary])) {
-                $errors.Add(("Top-level section '{0}' must be a mapping object." -f $sectionName))
+                $errors.Add(("Section '{0}' must be a mapping object." -f $sectionName))
                 continue
             }
 
@@ -359,10 +352,52 @@ function Read-ExportProfile {
                     $errors.Add(("Missing property '{0}' in section '{1}'." -f $propertyName, $sectionName))
                 }
             }
+
+            if ($sectionName -eq 'referenceData') {
+                if ($sectionValue.Contains('tables')) {
+                    $tablesValue = $sectionValue['tables']
+                    if ($null -eq $tablesValue) {
+                        $errors.Add("ReferenceData.tables is null. Expected a collection of strings.")
+                    }
+                    elseif ($tablesValue -is [System.Collections.IEnumerable] -and -not ($tablesValue -is [string])) {
+                        if ($tablesValue -is [System.Collections.IDictionary]) {
+                            $errors.Add("ReferenceData.tables must be a collection of strings. Found a mapping object.")
+                        }
+                        else {
+                            foreach ($tableEntry in $tablesValue) {
+                                if ($tableEntry -isnot [string]) {
+                                    $errors.Add(("ReferenceData.tables contains a non-string entry: {0}" -f $tableEntry))
+                                }
+                            }
+                        }
+                    }
+                    elseif ($tablesValue -isnot [string]) {
+                        $errors.Add(("ReferenceData.tables must be a collection of strings. Found {0}." -f $tablesValue.GetType().FullName))
+                    }
+                }
+            }
         }
 
         if ($errors.Count -gt 0) {
-            $message = ('Validation failed for configuration file "{0}": {1}' -f $resolvedPath, ($errors -join ' '))
+            $message = @(
+                'Configuration validation failed.',
+                '',
+                'File:',
+                $resolvedPath,
+                '',
+                'Problems found:',
+                ($errors | ForEach-Object { "  - {0}" -f $_ }),
+                '',
+                'Suggested actions:',
+                '  Option 1:',
+                '    Correct the configuration manually.',
+                '  Option 2:',
+                '    Delete export.yaml and rerun the exporter to generate a new template.',
+                '',
+                'Validation aborted.'
+            ) -join [Environment]::NewLine
+
+            Write-Log -Level Error -Message ('Validation errors: {0}' -f $resolvedPath)
             throw [System.InvalidOperationException]::new($message)
         }
 
@@ -371,8 +406,10 @@ function Read-ExportProfile {
         return $profile
     }
     catch {
-        $message = $_.Exception.Message
-        Write-Log -Level Error -Message ("Validation errors: {0}" -f $message)
+        if ($_.Exception.Message -and $_.Exception.Message -notmatch 'Configuration validation failed') {
+            $message = $_.Exception.Message
+            Write-Log -Level Error -Message ("Validation errors: {0}" -f $message)
+        }
         throw
     }
 }
@@ -503,9 +540,10 @@ function Test-ExportDependencies {
                 }
                 else {
                     $detail.Message = ("ERROR: {0} not installed. {1}" -f $dependency.Name, $dependency.InstallCommand)
-                    $missingDependencies.Add(("{0} ({1})" -f $dependency.Name, $dependency.InstallCommand))
+                    $missingDependencies.Add($dependency.Name)
                     $installCommands.Add($dependency.InstallCommand)
                     Write-Log -Level Error -Message ("ERROR: {0} not installed. {1}" -f $dependency.Name, $dependency.InstallCommand)
+                    Write-Log -Level Information -Message ("Install: {0}" -f $dependency.InstallCommand)
                 }
             }
             'powershell-yaml' {
@@ -524,9 +562,10 @@ function Test-ExportDependencies {
                 }
                 else {
                     $detail.Message = ("ERROR: powershell-yaml not installed. {0}" -f $dependency.InstallCommand)
-                    $missingDependencies.Add(("{0} ({1})" -f $dependency.Name, $dependency.InstallCommand))
+                    $missingDependencies.Add($dependency.Name)
                     $installCommands.Add($dependency.InstallCommand)
                     Write-Log -Level Error -Message ("ERROR: powershell-yaml not installed. {0}" -f $dependency.InstallCommand)
+                    Write-Log -Level Information -Message ("Install: {0}" -f $dependency.InstallCommand)
                 }
             }
             'SqlServer' {
@@ -540,7 +579,10 @@ function Test-ExportDependencies {
                 }
                 else {
                     $detail.Message = 'INFO: SqlServer not installed (optional)'
+                    $missingDependencies.Add($dependency.Name)
+                    $installCommands.Add($dependency.InstallCommand)
                     Write-Log -Level Information -Message 'INFO: SqlServer not installed (optional)'
+                    Write-Log -Level Information -Message ("Install: {0}" -f $dependency.InstallCommand)
                 }
             }
             'Graphviz' {
@@ -554,7 +596,10 @@ function Test-ExportDependencies {
                 }
                 else {
                     $detail.Message = 'INFO: Graphviz not installed (optional)'
+                    $missingDependencies.Add($dependency.Name)
+                    $installCommands.Add($dependency.InstallCommand)
                     Write-Log -Level Information -Message 'INFO: Graphviz not installed (optional)'
+                    Write-Log -Level Information -Message ("Install: {0}" -f $dependency.InstallCommand)
                 }
             }
         }
@@ -569,7 +614,7 @@ function Test-ExportDependencies {
     Write-Log -Level Information -Message 'Dependency Check Complete'
 
     return [PSCustomObject]@{
-        IsValid = ($missingDependencies.Count -eq 0)
+        IsValid = (($dependencyDetails | Where-Object { $_.Required -and -not $_.Installed }).Count -eq 0)
         InstalledDependencies = @($installedDependencies)
         MissingDependencies = @($missingDependencies)
         InstallCommands = @($installCommands)

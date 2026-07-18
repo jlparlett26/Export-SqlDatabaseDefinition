@@ -54,8 +54,7 @@ Completed:
 ✅ YAML Schema
 ✅ Get-DefaultExportProfileContent
 ✅ Initialize-ExportProfile
-✅ Read-ExportProfil
-
+✅ Read-ExportProfile
 
 In Progress:
 
@@ -123,6 +122,18 @@ The exporter must never automatically install dependencies.
 
 The exporter should fail fast before beginning export processing.
 
+Future Enhancement:
+
+Dependency validation should report installation commands for both required and optional dependencies.
+
+Example:
+
+SqlServer
+    Install-Module SqlServer -Scope CurrentUser
+
+Graphviz
+    winget install Graphviz.Graphviz
+    
 ## Repository Separation
 
 1. The exporter project repository shall never contain exported database artifacts.
