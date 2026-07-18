@@ -963,6 +963,764 @@ function Export-DatabaseProperties {
     }
 }
 
+function Export-Schemas {
+    <#
+    .SYNOPSIS
+        Exports user-defined database schemas to one file per schema.
+
+    .DESCRIPTION
+        Creates the Schemas output folder when needed and writes one deterministic
+        SQL file per user-defined schema from the connected database.
+
+    .PARAMETER Connection
+        Connection result returned by Connect-SqlDatabase.
+
+    .PARAMETER OutputFolder
+        Target export folder.
+
+    .OUTPUTS
+        System.Management.Automation.PSCustomObject
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Connection,
+
+        [Parameter(Mandatory = $true)]
+        [string]$OutputFolder
+    )
+
+    try {
+        if ($null -eq $Connection) {
+            throw [System.InvalidOperationException]::new('Connection cannot be null.')
+        }
+
+        if (-not [bool]$Connection.Connected) {
+            throw [System.InvalidOperationException]::new('Connection.Connected must be true.')
+        }
+
+        if ($null -eq $Connection.DatabaseObject) {
+            throw [System.InvalidOperationException]::new('Connection.DatabaseObject cannot be null.')
+        }
+
+        if ([string]::IsNullOrWhiteSpace($OutputFolder)) {
+            throw [System.InvalidOperationException]::new('OutputFolder cannot be null, empty, or whitespace.')
+        }
+
+        $resolvedOutputFolder = [System.IO.Path]::GetFullPath($OutputFolder.Trim())
+        if (-not (Test-Path -LiteralPath $resolvedOutputFolder -PathType Container)) {
+            throw [System.InvalidOperationException]::new(("OutputFolder does not exist: {0}" -f $resolvedOutputFolder))
+        }
+
+        Write-Log -Level Information -Message 'Starting schema export'
+
+        $schemasFolder = [System.IO.Path]::Combine($resolvedOutputFolder, 'Schemas')
+        if (-not (Test-Path -LiteralPath $schemasFolder -PathType Container)) {
+            New-Item -ItemType Directory -Path $schemasFolder -Force | Out-Null
+        }
+
+        $rawSchemas = @($Connection.DatabaseObject.Schemas)
+        $schemasToExport = @(
+            $rawSchemas |
+                Where-Object {
+                    $null -ne $_ -and
+                    -not [string]::IsNullOrWhiteSpace([string]$_.Name) -and
+                    ([string]$_.Name -ine 'sys') -and
+                    ([string]$_.Name -ine 'INFORMATION_SCHEMA')
+                } |
+                Sort-Object -Property Name
+        )
+
+        Write-Log -Level Information -Message ("Number of schemas found: {0}" -f $schemasToExport.Count)
+
+        $exportedFiles = [System.Collections.Generic.List[string]]::new()
+
+        foreach ($schema in $schemasToExport) {
+            $schemaName = [string]$schema.Name
+            $schemaOwner = $null
+
+            try {
+                $schemaOwnerProperty = $schema.PSObject.Properties['Owner']
+                if ($null -ne $schemaOwnerProperty -and -not [string]::IsNullOrWhiteSpace([string]$schemaOwnerProperty.Value)) {
+                    $schemaOwner = [string]$schemaOwnerProperty.Value
+                }
+            }
+            catch {
+                $schemaOwner = $null
+            }
+
+            $schemaFilePath = [System.IO.Path]::Combine($schemasFolder, ('{0}.sql' -f $schemaName))
+            $escapedSchemaName = $schemaName.Replace(']', ']]')
+
+            if ([string]::IsNullOrWhiteSpace($schemaOwner)) {
+                $schemaScript = @(
+                    ('CREATE SCHEMA [{0}]' -f $escapedSchemaName),
+                    'GO'
+                ) -join [Environment]::NewLine
+            }
+            else {
+                $escapedSchemaOwner = $schemaOwner.Replace(']', ']]')
+                $schemaScript = @(
+                    ('CREATE SCHEMA [{0}]' -f $escapedSchemaName),
+                    ('AUTHORIZATION [{0}]' -f $escapedSchemaOwner),
+                    'GO'
+                ) -join [Environment]::NewLine
+            }
+
+            [System.IO.File]::WriteAllText($schemaFilePath, $schemaScript, [System.Text.UTF8Encoding]::new($false))
+            $exportedFiles.Add($schemaFilePath)
+            Write-Log -Level Information -Message ("Schema file created: {0}" -f $schemaFilePath)
+        }
+
+        Write-Log -Level Information -Message 'Schema export completed'
+
+        return [PSCustomObject]@{
+            SchemaCount = $schemasToExport.Count
+            OutputFolder = $schemasFolder
+            ExportedFiles = @($exportedFiles)
+        }
+    }
+    catch {
+        Write-Log -Level Error -Message ('Schema export failed: {0}' -f $_.Exception.Message) -ErrorAction Continue
+        throw [System.InvalidOperationException]::new(('Failed to export schemas. {0}' -f $_.Exception.Message))
+    }
+}
+
+function Export-Tables {
+    <#
+    .SYNOPSIS
+        Exports user-defined table definitions to one file per table.
+
+    .DESCRIPTION
+        Creates the Tables output folder when needed and writes deterministic,
+        schema-only table scripts for user-defined tables.
+
+    .PARAMETER Connection
+        Connection result returned by Connect-SqlDatabase.
+
+    .PARAMETER OutputFolder
+        Target export folder.
+
+    .OUTPUTS
+        System.Management.Automation.PSCustomObject
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Connection,
+
+        [Parameter(Mandatory = $true)]
+        [string]$OutputFolder
+    )
+
+    try {
+        if ($null -eq $Connection) {
+            throw [System.InvalidOperationException]::new('Connection cannot be null.')
+        }
+
+        if (-not [bool]$Connection.Connected) {
+            throw [System.InvalidOperationException]::new('Connection.Connected must be true.')
+        }
+
+        if ($null -eq $Connection.DatabaseObject) {
+            throw [System.InvalidOperationException]::new('Connection.DatabaseObject cannot be null.')
+        }
+
+        if ([string]::IsNullOrWhiteSpace($OutputFolder)) {
+            throw [System.InvalidOperationException]::new('OutputFolder cannot be null, empty, or whitespace.')
+        }
+
+        $resolvedOutputFolder = [System.IO.Path]::GetFullPath($OutputFolder.Trim())
+        if (-not (Test-Path -LiteralPath $resolvedOutputFolder -PathType Container)) {
+            throw [System.InvalidOperationException]::new(("OutputFolder does not exist: {0}" -f $resolvedOutputFolder))
+        }
+
+        Write-Log -Level Information -Message 'Starting table export'
+
+        $tablesFolder = [System.IO.Path]::Combine($resolvedOutputFolder, 'Tables')
+        Write-Log -Level Information -Message ("Output folder: {0}" -f $tablesFolder)
+
+        if (-not (Test-Path -LiteralPath $tablesFolder -PathType Container)) {
+            New-Item -ItemType Directory -Path $tablesFolder -Force | Out-Null
+        }
+
+        $database = $Connection.DatabaseObject
+        $rawTables = @($database.Tables)
+
+        $getBooleanProperty = {
+            param(
+                [Parameter(Mandatory = $true)]
+                [object]$Object,
+
+                [Parameter(Mandatory = $true)]
+                [string]$PropertyName
+            )
+
+            try {
+                $property = $Object.PSObject.Properties[$PropertyName]
+                if ($null -eq $property -or $null -eq $property.Value) {
+                    return $false
+                }
+
+                return [bool]$property.Value
+            }
+            catch {
+                return $false
+            }
+        }
+
+        $userTables = @(
+            $rawTables |
+                Where-Object {
+                    $null -ne $_ -and
+                    -not [string]::IsNullOrWhiteSpace([string]$_.Schema) -and
+                    -not [string]::IsNullOrWhiteSpace([string]$_.Name) -and
+                    ([string]$_.Schema -ine 'sys') -and
+                    ([string]$_.Schema -ine 'INFORMATION_SCHEMA') -and
+                    (-not (& $getBooleanProperty -Object $_ -PropertyName 'IsSystemObject'))
+                } |
+                Sort-Object -Property Schema, Name
+        )
+
+        Write-Log -Level Information -Message ("Number of user tables found: {0}" -f $userTables.Count)
+
+        $scriptingOptions = New-Object Microsoft.SqlServer.Management.Smo.ScriptingOptions
+        $scriptingOptions.ScriptSchema = $true
+        $scriptingOptions.ScriptData = $false
+        $scriptingOptions.IncludeHeaders = $false
+        $scriptingOptions.SchemaQualify = $true
+
+        foreach ($propertyName in @('Indexes', 'DriAll', 'Triggers', 'ScriptBatchTerminator')) {
+            try {
+                $optionProperty = $scriptingOptions.PSObject.Properties[$propertyName]
+                if ($null -ne $optionProperty) {
+                    switch ($propertyName) {
+                        'Indexes' { $scriptingOptions.Indexes = $true }
+                        'DriAll' { $scriptingOptions.DriAll = $true }
+                        'Triggers' { $scriptingOptions.Triggers = $false }
+                        'ScriptBatchTerminator' { $scriptingOptions.ScriptBatchTerminator = $true }
+                    }
+                }
+            }
+            catch {
+                # Ignore unsupported scripting options on older/different SMO versions.
+            }
+        }
+
+        $invalidFileNameCharacters = [System.IO.Path]::GetInvalidFileNameChars()
+        $invalidCharacterPattern = '[{0}]' -f [Regex]::Escape(($invalidFileNameCharacters -join ''))
+        $exportedFiles = [System.Collections.Generic.List[string]]::new()
+
+        foreach ($table in $userTables) {
+            $schemaName = [string]$table.Schema
+            $tableName = [string]$table.Name
+            $safeSchemaName = [Regex]::Replace($schemaName, $invalidCharacterPattern, '_')
+            $safeTableName = [Regex]::Replace($tableName, $invalidCharacterPattern, '_')
+            $tableFileName = '{0}.{1}.sql' -f $safeSchemaName, $safeTableName
+            $tableFilePath = [System.IO.Path]::Combine($tablesFolder, $tableFileName)
+
+            $scriptLines = @()
+            try {
+                $scriptLines = @($table.Script($scriptingOptions))
+            }
+            catch {
+                throw [System.InvalidOperationException]::new(("Table scripting failed for [{0}].[{1}]." -f $schemaName, $tableName))
+            }
+
+            $tableScript = ($scriptLines -join [Environment]::NewLine)
+            if ($tableScript.Length -gt 0 -and -not $tableScript.EndsWith([Environment]::NewLine)) {
+                $tableScript += [Environment]::NewLine
+            }
+
+            [System.IO.File]::WriteAllText($tableFilePath, $tableScript, [System.Text.UTF8Encoding]::new($false))
+            $exportedFiles.Add($tableFilePath)
+            Write-Log -Level Information -Message ("Table file created: {0}" -f $tableFilePath)
+        }
+
+        Write-Log -Level Information -Message 'Table export completed'
+
+        return [PSCustomObject]@{
+            TableCount = $userTables.Count
+            OutputFolder = $tablesFolder
+            ExportedFiles = @($exportedFiles)
+        }
+    }
+    catch {
+        Write-Log -Level Error -Message ('Table export failed: {0}' -f $_.Exception.Message) -ErrorAction Continue
+        throw [System.InvalidOperationException]::new(('Failed to export tables. {0}' -f $_.Exception.Message))
+    }
+}
+
+function Export-Views {
+    <#
+    .SYNOPSIS
+        Exports user-defined view definitions to one file per view.
+
+    .DESCRIPTION
+        Creates the Views output folder when needed and writes deterministic,
+        schema-only view scripts for user-defined views.
+
+    .PARAMETER Connection
+        Connection result returned by Connect-SqlDatabase.
+
+    .PARAMETER OutputFolder
+        Target export folder.
+
+    .OUTPUTS
+        System.Management.Automation.PSCustomObject
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Connection,
+
+        [Parameter(Mandatory = $true)]
+        [string]$OutputFolder
+    )
+
+    try {
+        if ($null -eq $Connection) {
+            throw [System.InvalidOperationException]::new('Connection cannot be null.')
+        }
+
+        if (-not [bool]$Connection.Connected) {
+            throw [System.InvalidOperationException]::new('Connection.Connected must be true.')
+        }
+
+        if ($null -eq $Connection.DatabaseObject) {
+            throw [System.InvalidOperationException]::new('Connection.DatabaseObject cannot be null.')
+        }
+
+        if ([string]::IsNullOrWhiteSpace($OutputFolder)) {
+            throw [System.InvalidOperationException]::new('OutputFolder cannot be null, empty, or whitespace.')
+        }
+
+        $resolvedOutputFolder = [System.IO.Path]::GetFullPath($OutputFolder.Trim())
+        if (-not (Test-Path -LiteralPath $resolvedOutputFolder -PathType Container)) {
+            throw [System.InvalidOperationException]::new(("OutputFolder does not exist: {0}" -f $resolvedOutputFolder))
+        }
+
+        Write-Log -Level Information -Message 'Starting view export'
+
+        $viewsFolder = [System.IO.Path]::Combine($resolvedOutputFolder, 'Views')
+        if (-not (Test-Path -LiteralPath $viewsFolder -PathType Container)) {
+            New-Item -ItemType Directory -Path $viewsFolder -Force | Out-Null
+        }
+
+        $database = $Connection.DatabaseObject
+        $rawViews = @($database.Views)
+
+        $getBooleanProperty = {
+            param(
+                [Parameter(Mandatory = $true)]
+                [object]$Object,
+
+                [Parameter(Mandatory = $true)]
+                [string]$PropertyName
+            )
+
+            try {
+                $property = $Object.PSObject.Properties[$PropertyName]
+                if ($null -eq $property -or $null -eq $property.Value) {
+                    return $false
+                }
+
+                return [bool]$property.Value
+            }
+            catch {
+                return $false
+            }
+        }
+
+        $userViews = @(
+            $rawViews |
+                Where-Object {
+                    $null -ne $_ -and
+                    -not [string]::IsNullOrWhiteSpace([string]$_.Schema) -and
+                    -not [string]::IsNullOrWhiteSpace([string]$_.Name) -and
+                    ([string]$_.Schema -ine 'sys') -and
+                    ([string]$_.Schema -ine 'INFORMATION_SCHEMA') -and
+                    (-not (& $getBooleanProperty -Object $_ -PropertyName 'IsSystemObject'))
+                } |
+                Sort-Object -Property Schema, Name
+        )
+
+        Write-Log -Level Information -Message ("Number of views found: {0}" -f $userViews.Count)
+
+        $scriptingOptions = New-Object Microsoft.SqlServer.Management.Smo.ScriptingOptions
+        $scriptingOptions.ScriptSchema = $true
+        $scriptingOptions.ScriptData = $false
+        $scriptingOptions.IncludeHeaders = $false
+        $scriptingOptions.SchemaQualify = $true
+
+        try {
+            $batchTerminatorProperty = $scriptingOptions.PSObject.Properties['ScriptBatchTerminator']
+            if ($null -ne $batchTerminatorProperty) {
+                $scriptingOptions.ScriptBatchTerminator = $true
+            }
+        }
+        catch {
+            # Ignore unsupported scripting options on older/different SMO versions.
+        }
+
+        $invalidFileNameCharacters = [System.IO.Path]::GetInvalidFileNameChars()
+        $invalidCharacterPattern = '[{0}]' -f [Regex]::Escape(($invalidFileNameCharacters -join ''))
+        $exportedFiles = [System.Collections.Generic.List[string]]::new()
+
+        foreach ($view in $userViews) {
+            $schemaName = [string]$view.Schema
+            $viewName = [string]$view.Name
+            $safeSchemaName = [Regex]::Replace($schemaName, $invalidCharacterPattern, '_')
+            $safeViewName = [Regex]::Replace($viewName, $invalidCharacterPattern, '_')
+            $viewFileName = '{0}.{1}.sql' -f $safeSchemaName, $safeViewName
+            $viewFilePath = [System.IO.Path]::Combine($viewsFolder, $viewFileName)
+
+            $scriptLines = @()
+            try {
+                $scriptLines = @($view.Script($scriptingOptions))
+            }
+            catch {
+                throw [System.InvalidOperationException]::new(("View scripting failed for [{0}].[{1}]." -f $schemaName, $viewName))
+            }
+
+            $viewScript = ($scriptLines -join [Environment]::NewLine)
+            if ($viewScript.Length -gt 0 -and -not $viewScript.EndsWith([Environment]::NewLine)) {
+                $viewScript += [Environment]::NewLine
+            }
+
+            [System.IO.File]::WriteAllText($viewFilePath, $viewScript, [System.Text.UTF8Encoding]::new($false))
+            $exportedFiles.Add($viewFilePath)
+            Write-Log -Level Information -Message ("View file created: {0}" -f $viewFilePath)
+        }
+
+        Write-Log -Level Information -Message 'View export complete'
+
+        return [PSCustomObject]@{
+            ViewCount = $userViews.Count
+            OutputFolder = $viewsFolder
+            ExportedFiles = @($exportedFiles)
+        }
+    }
+    catch {
+        Write-Log -Level Error -Message ('View export failed: {0}' -f $_.Exception.Message) -ErrorAction Continue
+        throw [System.InvalidOperationException]::new(('Failed to export views. {0}' -f $_.Exception.Message))
+    }
+}
+
+function Export-StoredProcedures {
+    <#
+    .SYNOPSIS
+        Exports user-defined stored procedure definitions to one file per procedure.
+
+    .DESCRIPTION
+        Creates the StoredProcedures output folder when needed and writes deterministic,
+        schema-only stored procedure scripts for user-defined procedures.
+
+    .PARAMETER Connection
+        Connection result returned by Connect-SqlDatabase.
+
+    .PARAMETER OutputFolder
+        Target export folder.
+
+    .OUTPUTS
+        System.Management.Automation.PSCustomObject
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Connection,
+
+        [Parameter(Mandatory = $true)]
+        [string]$OutputFolder
+    )
+
+    try {
+        if ($null -eq $Connection) {
+            throw [System.InvalidOperationException]::new('Connection cannot be null.')
+        }
+
+        if (-not [bool]$Connection.Connected) {
+            throw [System.InvalidOperationException]::new('Connection.Connected must be true.')
+        }
+
+        if ($null -eq $Connection.DatabaseObject) {
+            throw [System.InvalidOperationException]::new('Connection.DatabaseObject cannot be null.')
+        }
+
+        if ([string]::IsNullOrWhiteSpace($OutputFolder)) {
+            throw [System.InvalidOperationException]::new('OutputFolder cannot be null, empty, or whitespace.')
+        }
+
+        $resolvedOutputFolder = [System.IO.Path]::GetFullPath($OutputFolder.Trim())
+        if (-not (Test-Path -LiteralPath $resolvedOutputFolder -PathType Container)) {
+            throw [System.InvalidOperationException]::new(("OutputFolder does not exist: {0}" -f $resolvedOutputFolder))
+        }
+
+        Write-Log -Level Information -Message 'Starting stored procedure export'
+
+        $proceduresFolder = [System.IO.Path]::Combine($resolvedOutputFolder, 'StoredProcedures')
+        if (-not (Test-Path -LiteralPath $proceduresFolder -PathType Container)) {
+            New-Item -ItemType Directory -Path $proceduresFolder -Force | Out-Null
+        }
+
+        $database = $Connection.DatabaseObject
+        $rawProcedures = @($database.StoredProcedures)
+
+        $getBooleanProperty = {
+            param(
+                [Parameter(Mandatory = $true)]
+                [object]$Object,
+
+                [Parameter(Mandatory = $true)]
+                [string]$PropertyName
+            )
+
+            try {
+                $property = $Object.PSObject.Properties[$PropertyName]
+                if ($null -eq $property -or $null -eq $property.Value) {
+                    return $false
+                }
+
+                return [bool]$property.Value
+            }
+            catch {
+                return $false
+            }
+        }
+
+        $userProcedures = @(
+            $rawProcedures |
+                Where-Object {
+                    $null -ne $_ -and
+                    -not [string]::IsNullOrWhiteSpace([string]$_.Schema) -and
+                    -not [string]::IsNullOrWhiteSpace([string]$_.Name) -and
+                    ([string]$_.Schema -ine 'sys') -and
+                    ([string]$_.Schema -ine 'INFORMATION_SCHEMA') -and
+                    (-not (& $getBooleanProperty -Object $_ -PropertyName 'IsSystemObject')) -and
+                    (-not (& $getBooleanProperty -Object $_ -PropertyName 'IsSystem'))
+                } |
+                Sort-Object -Property Schema, Name
+        )
+
+        Write-Log -Level Information -Message ("Procedure count: {0}" -f $userProcedures.Count)
+
+        $scriptingOptions = New-Object Microsoft.SqlServer.Management.Smo.ScriptingOptions
+        $scriptingOptions.ScriptSchema = $true
+        $scriptingOptions.ScriptData = $false
+        $scriptingOptions.IncludeHeaders = $false
+        $scriptingOptions.SchemaQualify = $true
+
+        try {
+            $batchTerminatorProperty = $scriptingOptions.PSObject.Properties['ScriptBatchTerminator']
+            if ($null -ne $batchTerminatorProperty) {
+                $scriptingOptions.ScriptBatchTerminator = $true
+            }
+        }
+        catch {
+            # Ignore unsupported scripting options on older/different SMO versions.
+        }
+
+        $invalidFileNameCharacters = [System.IO.Path]::GetInvalidFileNameChars()
+        $invalidCharacterPattern = '[{0}]' -f [Regex]::Escape(($invalidFileNameCharacters -join ''))
+        $exportedFiles = [System.Collections.Generic.List[string]]::new()
+
+        foreach ($procedure in $userProcedures) {
+            $schemaName = [string]$procedure.Schema
+            $procedureName = [string]$procedure.Name
+            $safeSchemaName = [Regex]::Replace($schemaName, $invalidCharacterPattern, '_')
+            $safeProcedureName = [Regex]::Replace($procedureName, $invalidCharacterPattern, '_')
+            $procedureFileName = '{0}.{1}.sql' -f $safeSchemaName, $safeProcedureName
+            $procedureFilePath = [System.IO.Path]::Combine($proceduresFolder, $procedureFileName)
+
+            $scriptLines = @()
+            try {
+                $scriptLines = @($procedure.Script($scriptingOptions))
+            }
+            catch {
+                throw [System.InvalidOperationException]::new(("Stored procedure scripting failed for [{0}].[{1}]." -f $schemaName, $procedureName))
+            }
+
+            $procedureScript = ($scriptLines -join [Environment]::NewLine)
+            if ($procedureScript.Length -gt 0 -and -not $procedureScript.EndsWith([Environment]::NewLine)) {
+                $procedureScript += [Environment]::NewLine
+            }
+
+            [System.IO.File]::WriteAllText($procedureFilePath, $procedureScript, [System.Text.UTF8Encoding]::new($false))
+            $exportedFiles.Add($procedureFilePath)
+            Write-Log -Level Information -Message ("Stored procedure exported: {0}" -f $procedureFilePath)
+        }
+
+        Write-Log -Level Information -Message 'Stored procedure export completed'
+
+        return [PSCustomObject]@{
+            ProcedureCount = $userProcedures.Count
+            OutputFolder = $proceduresFolder
+            ExportedFiles = @($exportedFiles)
+        }
+    }
+    catch {
+        Write-Log -Level Error -Message ('Stored procedure export failed: {0}' -f $_.Exception.Message) -ErrorAction Continue
+        throw [System.InvalidOperationException]::new(('Failed to export stored procedures. {0}' -f $_.Exception.Message))
+    }
+}
+
+function Export-Functions {
+    <#
+    .SYNOPSIS
+        Exports user-defined function definitions to one file per function.
+
+    .DESCRIPTION
+        Creates the Functions output folder when needed and writes deterministic,
+        schema-only function scripts for user-defined SQL functions.
+
+    .PARAMETER Connection
+        Connection result returned by Connect-SqlDatabase.
+
+    .PARAMETER OutputFolder
+        Target export folder.
+
+    .OUTPUTS
+        System.Management.Automation.PSCustomObject
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Connection,
+
+        [Parameter(Mandatory = $true)]
+        [string]$OutputFolder
+    )
+
+    try {
+        if ($null -eq $Connection) {
+            throw [System.InvalidOperationException]::new('Connection cannot be null.')
+        }
+
+        if (-not [bool]$Connection.Connected) {
+            throw [System.InvalidOperationException]::new('Connection.Connected must be true.')
+        }
+
+        if ($null -eq $Connection.DatabaseObject) {
+            throw [System.InvalidOperationException]::new('Connection.DatabaseObject cannot be null.')
+        }
+
+        if ([string]::IsNullOrWhiteSpace($OutputFolder)) {
+            throw [System.InvalidOperationException]::new('OutputFolder cannot be null, empty, or whitespace.')
+        }
+
+        $resolvedOutputFolder = [System.IO.Path]::GetFullPath($OutputFolder.Trim())
+        if (-not (Test-Path -LiteralPath $resolvedOutputFolder -PathType Container)) {
+            throw [System.InvalidOperationException]::new(("OutputFolder does not exist: {0}" -f $resolvedOutputFolder))
+        }
+
+        Write-Log -Level Information -Message 'Starting function export'
+
+        $functionsFolder = [System.IO.Path]::Combine($resolvedOutputFolder, 'Functions')
+        if (-not (Test-Path -LiteralPath $functionsFolder -PathType Container)) {
+            New-Item -ItemType Directory -Path $functionsFolder -Force | Out-Null
+        }
+
+        $database = $Connection.DatabaseObject
+        $rawFunctions = @($database.UserDefinedFunctions)
+
+        $getBooleanProperty = {
+            param(
+                [Parameter(Mandatory = $true)]
+                [object]$Object,
+
+                [Parameter(Mandatory = $true)]
+                [string]$PropertyName
+            )
+
+            try {
+                $property = $Object.PSObject.Properties[$PropertyName]
+                if ($null -eq $property -or $null -eq $property.Value) {
+                    return $false
+                }
+
+                return [bool]$property.Value
+            }
+            catch {
+                return $false
+            }
+        }
+
+        $userFunctions = @(
+            $rawFunctions |
+                Where-Object {
+                    $null -ne $_ -and
+                    -not [string]::IsNullOrWhiteSpace([string]$_.Schema) -and
+                    -not [string]::IsNullOrWhiteSpace([string]$_.Name) -and
+                    ([string]$_.Schema -ine 'sys') -and
+                    ([string]$_.Schema -ine 'INFORMATION_SCHEMA') -and
+                    (-not (& $getBooleanProperty -Object $_ -PropertyName 'IsSystemObject')) -and
+                    (-not (& $getBooleanProperty -Object $_ -PropertyName 'IsSystem'))
+                } |
+                Sort-Object -Property Schema, Name
+        )
+
+        Write-Log -Level Information -Message ("Function count: {0}" -f $userFunctions.Count)
+
+        $scriptingOptions = New-Object Microsoft.SqlServer.Management.Smo.ScriptingOptions
+        $scriptingOptions.ScriptSchema = $true
+        $scriptingOptions.ScriptData = $false
+        $scriptingOptions.IncludeHeaders = $false
+        $scriptingOptions.SchemaQualify = $true
+
+        try {
+            $batchTerminatorProperty = $scriptingOptions.PSObject.Properties['ScriptBatchTerminator']
+            if ($null -ne $batchTerminatorProperty) {
+                $scriptingOptions.ScriptBatchTerminator = $true
+            }
+        }
+        catch {
+            # Ignore unsupported scripting options on older/different SMO versions.
+        }
+
+        $invalidFileNameCharacters = [System.IO.Path]::GetInvalidFileNameChars()
+        $invalidCharacterPattern = '[{0}]' -f [Regex]::Escape(($invalidFileNameCharacters -join ''))
+        $exportedFiles = [System.Collections.Generic.List[string]]::new()
+
+        foreach ($functionObject in $userFunctions) {
+            $schemaName = [string]$functionObject.Schema
+            $functionName = [string]$functionObject.Name
+            $safeSchemaName = [Regex]::Replace($schemaName, $invalidCharacterPattern, '_')
+            $safeFunctionName = [Regex]::Replace($functionName, $invalidCharacterPattern, '_')
+            $functionFileName = '{0}.{1}.sql' -f $safeSchemaName, $safeFunctionName
+            $functionFilePath = [System.IO.Path]::Combine($functionsFolder, $functionFileName)
+
+            $scriptLines = @()
+            try {
+                $scriptLines = @($functionObject.Script($scriptingOptions))
+            }
+            catch {
+                throw [System.InvalidOperationException]::new(("Function scripting failed for [{0}].[{1}]." -f $schemaName, $functionName))
+            }
+
+            $functionScript = ($scriptLines -join [Environment]::NewLine)
+            if ($functionScript.Length -gt 0 -and -not $functionScript.EndsWith([Environment]::NewLine)) {
+                $functionScript += [Environment]::NewLine
+            }
+
+            [System.IO.File]::WriteAllText($functionFilePath, $functionScript, [System.Text.UTF8Encoding]::new($false))
+            $exportedFiles.Add($functionFilePath)
+            Write-Log -Level Information -Message ("Function exported: {0}" -f $functionFilePath)
+        }
+
+        Write-Log -Level Information -Message 'Function export completed'
+
+        return [PSCustomObject]@{
+            FunctionCount = $userFunctions.Count
+            OutputFolder = $functionsFolder
+            ExportedFiles = @($exportedFiles)
+        }
+    }
+    catch {
+        Write-Log -Level Error -Message ('Function export failed: {0}' -f $_.Exception.Message) -ErrorAction Continue
+        throw [System.InvalidOperationException]::new(('Failed to export functions. {0}' -f $_.Exception.Message))
+    }
+}
+
 function Export-SqlDatabaseDefinition {
     <#
     .SYNOPSIS
@@ -1161,6 +1919,11 @@ function Test-ExportDependencies {
 #endregion
 
 #region Main
+# When dot-sourced (for tests/development), load functions only and skip script execution.
+if ($MyInvocation.InvocationName -eq '.') {
+    return
+}
+
 try {
     $null = Export-SqlDatabaseDefinition
     exit 0

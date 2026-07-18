@@ -108,16 +108,18 @@ function Invoke-TestStep {
 Clear-Host
 Write-TestStatus -Status INFO -Message 'Starting current workflow regression test.'
 
+$script:projectRoot = Split-Path -Parent $PSScriptRoot
+$script:scriptPath = Join-Path $script:projectRoot 'Export-SqlDatabaseDefinition.ps1'
+
+Assert-Condition `
+    -Condition (Test-Path -LiteralPath $script:scriptPath -PathType Leaf) `
+    -Message "Could not find Export-SqlDatabaseDefinition.ps1 at: $script:scriptPath"
+
+Write-TestStatus -Status INFO -Message "Loading exporter script from: $script:scriptPath"
+
+. $script:scriptPath
+
 Invoke-TestStep -Name 'Setup Regression Context' -ScriptBlock {
-    $script:projectRoot = Split-Path -Parent $PSScriptRoot
-    $script:scriptPath = Join-Path $script:projectRoot 'Export-SqlDatabaseDefinition.ps1'
-
-    Assert-Condition `
-        -Condition (Test-Path -LiteralPath $script:scriptPath -PathType Leaf) `
-        -Message "Could not find Export-SqlDatabaseDefinition.ps1 at: $script:scriptPath"
-
-    . $script:scriptPath
-
     $script:resolvedOutputFolder = [System.IO.Path]::GetFullPath($OutputFolder.Trim())
 
     Assert-Condition `
@@ -281,6 +283,346 @@ Invoke-TestStep -Name 'Export-DatabaseProperties' -ScriptBlock {
     Assert-Condition `
         -Condition (-not [string]::IsNullOrWhiteSpace($databaseContent)) `
         -Message 'Database.sql is empty.'
+}
+
+Invoke-TestStep -Name 'Export-Schemas' -ScriptBlock {
+    if (-not (Get-Command -Name Export-Schemas -ErrorAction SilentlyContinue)) {
+        Skip-TestStep -Message 'Export-Schemas function was not found.'
+    }
+
+    if ($null -eq $script:connection) {
+        Skip-TestStep -Message 'Connect-SqlDatabase did not produce a valid connection object.'
+    }
+
+    Export-Schemas `
+        -Connection $script:connection `
+        -OutputFolder $script:resolvedOutputFolder | Out-Null
+
+    $schemasFolderPath = Join-Path $script:resolvedOutputFolder 'Schemas'
+
+    Assert-Condition `
+        -Condition (Test-Path -LiteralPath $schemasFolderPath -PathType Container) `
+        -Message "Schemas folder was not created: $schemasFolderPath"
+
+    $schemaFiles = @(Get-ChildItem -LiteralPath $schemasFolderPath -Filter '*.sql' -File)
+
+    Assert-Condition `
+        -Condition ($schemaFiles.Count -gt 0) `
+        -Message "No schema files were exported to: $schemasFolderPath"
+
+    $containsCreateSchema = $false
+
+    foreach ($schemaFile in $schemaFiles) {
+        Assert-Condition `
+            -Condition (Test-Path -LiteralPath $schemaFile.FullName -PathType Leaf) `
+            -Message "Schema file does not exist: $($schemaFile.FullName)"
+
+        $schemaFileContent = Get-Content -LiteralPath $schemaFile.FullName -Raw
+
+        Assert-Condition `
+            -Condition (-not [string]::IsNullOrWhiteSpace($schemaFileContent)) `
+            -Message "Schema file is empty: $($schemaFile.FullName)"
+
+        if ($schemaFileContent -match 'CREATE\s+SCHEMA') {
+            $containsCreateSchema = $true
+        }
+    }
+
+    Assert-Condition `
+        -Condition ($containsCreateSchema) `
+        -Message 'No exported schema file contains CREATE SCHEMA.'
+}
+
+Invoke-TestStep -Name 'Export-Tables' -ScriptBlock {
+    if (-not (Get-Command -Name Export-Tables -ErrorAction SilentlyContinue)) {
+        Skip-TestStep -Message 'Export-Tables function was not found.'
+    }
+
+    if ($null -eq $script:connection) {
+        Skip-TestStep -Message 'Connect-SqlDatabase did not produce a valid connection object.'
+    }
+
+    $tableExportResult = Export-Tables `
+        -Connection $script:connection `
+        -OutputFolder $script:resolvedOutputFolder
+
+    $tablesFolderPath = Join-Path $script:resolvedOutputFolder 'Tables'
+
+    Assert-Condition `
+        -Condition (Test-Path -LiteralPath $tablesFolderPath -PathType Container) `
+        -Message "Tables folder was not created: $tablesFolderPath"
+
+    Assert-Condition `
+        -Condition ($null -ne $tableExportResult) `
+        -Message 'Export-Tables returned null.'
+
+    Assert-Condition `
+        -Condition ($null -ne $tableExportResult.PSObject.Properties['TableCount']) `
+        -Message 'Export-Tables result does not include TableCount.'
+
+    Assert-Condition `
+        -Condition ($null -ne $tableExportResult.PSObject.Properties['OutputFolder']) `
+        -Message 'Export-Tables result does not include OutputFolder.'
+
+    Assert-Condition `
+        -Condition ($null -ne $tableExportResult.PSObject.Properties['ExportedFiles']) `
+        -Message 'Export-Tables result does not include ExportedFiles.'
+
+    if ([int]$tableExportResult.TableCount -gt 0) {
+        $tableFiles = @(Get-ChildItem -LiteralPath $tablesFolderPath -Filter '*.sql' -File)
+
+        Assert-Condition `
+            -Condition ($tableFiles.Count -gt 0) `
+            -Message "No table files were exported to: $tablesFolderPath"
+
+        $containsCreateTable = $false
+
+        foreach ($tableFilePath in @($tableExportResult.ExportedFiles)) {
+            Assert-Condition `
+                -Condition (-not [string]::IsNullOrWhiteSpace([string]$tableFilePath)) `
+                -Message 'ExportedFiles contains an empty path value.'
+
+            Assert-Condition `
+                -Condition (Test-Path -LiteralPath $tableFilePath -PathType Leaf) `
+                -Message "Exported table file does not exist: $tableFilePath"
+
+            $tableFileContent = Get-Content -LiteralPath $tableFilePath -Raw
+
+            Assert-Condition `
+                -Condition (-not [string]::IsNullOrWhiteSpace($tableFileContent)) `
+                -Message "Exported table file is empty: $tableFilePath"
+
+            if ($tableFileContent -match 'CREATE\s+TABLE') {
+                $containsCreateTable = $true
+            }
+        }
+
+        Assert-Condition `
+            -Condition ($containsCreateTable) `
+            -Message 'No exported table file contains CREATE TABLE.'
+    }
+    else {
+        Write-TestStatus -Status WARN -Message 'Export-Tables found no user tables to export.'
+    }
+}
+
+Invoke-TestStep -Name 'Export-Views' -ScriptBlock {
+    if (-not (Get-Command -Name Export-Views -ErrorAction SilentlyContinue)) {
+        Skip-TestStep -Message 'Export-Views function was not found.'
+    }
+
+    if ($null -eq $script:connection) {
+        Skip-TestStep -Message 'Connect-SqlDatabase did not produce a valid connection object.'
+    }
+
+    $viewExportResult = Export-Views `
+        -Connection $script:connection `
+        -OutputFolder $script:resolvedOutputFolder
+
+    $viewsFolderPath = Join-Path $script:resolvedOutputFolder 'Views'
+
+    Assert-Condition `
+        -Condition (Test-Path -LiteralPath $viewsFolderPath -PathType Container) `
+        -Message "Views folder was not created: $viewsFolderPath"
+
+    Assert-Condition `
+        -Condition ($null -ne $viewExportResult) `
+        -Message 'Export-Views returned null.'
+
+    Assert-Condition `
+        -Condition ($null -ne $viewExportResult.PSObject.Properties['ViewCount']) `
+        -Message 'Export-Views result does not include ViewCount.'
+
+    Assert-Condition `
+        -Condition ($null -ne $viewExportResult.PSObject.Properties['OutputFolder']) `
+        -Message 'Export-Views result does not include OutputFolder.'
+
+    Assert-Condition `
+        -Condition ($null -ne $viewExportResult.PSObject.Properties['ExportedFiles']) `
+        -Message 'Export-Views result does not include ExportedFiles.'
+
+    if ([int]$viewExportResult.ViewCount -gt 0) {
+        $viewFiles = @(Get-ChildItem -LiteralPath $viewsFolderPath -Filter '*.sql' -File)
+
+        Assert-Condition `
+            -Condition ($viewFiles.Count -gt 0) `
+            -Message "No view files were exported to: $viewsFolderPath"
+
+        $containsViewDefinition = $false
+
+        foreach ($viewFilePath in @($viewExportResult.ExportedFiles)) {
+            Assert-Condition `
+                -Condition (-not [string]::IsNullOrWhiteSpace([string]$viewFilePath)) `
+                -Message 'ExportedFiles contains an empty path value.'
+
+            Assert-Condition `
+                -Condition (Test-Path -LiteralPath $viewFilePath -PathType Leaf) `
+                -Message "Exported view file does not exist: $viewFilePath"
+
+            $viewFileContent = Get-Content -LiteralPath $viewFilePath -Raw
+
+            Assert-Condition `
+                -Condition (-not [string]::IsNullOrWhiteSpace($viewFileContent)) `
+                -Message "Exported view file is empty: $viewFilePath"
+
+            if ($viewFileContent -match 'CREATE\s+VIEW|ALTER\s+VIEW') {
+                $containsViewDefinition = $true
+            }
+        }
+
+        Assert-Condition `
+            -Condition ($containsViewDefinition) `
+            -Message 'No exported view file contains CREATE VIEW or ALTER VIEW.'
+    }
+    else {
+        Write-TestStatus -Status WARN -Message 'Export-Views found no user views to export.'
+    }
+}
+
+Invoke-TestStep -Name 'Export-StoredProcedures' -ScriptBlock {
+    if (-not (Get-Command -Name Export-StoredProcedures -ErrorAction SilentlyContinue)) {
+        Skip-TestStep -Message 'Export-StoredProcedures function was not found.'
+    }
+
+    if ($null -eq $script:connection) {
+        Skip-TestStep -Message 'Connect-SqlDatabase did not produce a valid connection object.'
+    }
+
+    $procedureExportResult = Export-StoredProcedures `
+        -Connection $script:connection `
+        -OutputFolder $script:resolvedOutputFolder
+
+    $proceduresFolderPath = Join-Path $script:resolvedOutputFolder 'StoredProcedures'
+
+    Assert-Condition `
+        -Condition (Test-Path -LiteralPath $proceduresFolderPath -PathType Container) `
+        -Message "StoredProcedures folder was not created: $proceduresFolderPath"
+
+    Assert-Condition `
+        -Condition ($null -ne $procedureExportResult) `
+        -Message 'Export-StoredProcedures returned null.'
+
+    Assert-Condition `
+        -Condition ($null -ne $procedureExportResult.PSObject.Properties['ProcedureCount']) `
+        -Message 'Export-StoredProcedures result does not include ProcedureCount.'
+
+    Assert-Condition `
+        -Condition ($null -ne $procedureExportResult.PSObject.Properties['OutputFolder']) `
+        -Message 'Export-StoredProcedures result does not include OutputFolder.'
+
+    Assert-Condition `
+        -Condition ($null -ne $procedureExportResult.PSObject.Properties['ExportedFiles']) `
+        -Message 'Export-StoredProcedures result does not include ExportedFiles.'
+
+    if ([int]$procedureExportResult.ProcedureCount -gt 0) {
+        $procedureFiles = @(Get-ChildItem -LiteralPath $proceduresFolderPath -Filter '*.sql' -File)
+
+        Assert-Condition `
+            -Condition ($procedureFiles.Count -gt 0) `
+            -Message "No stored procedure files were exported to: $proceduresFolderPath"
+
+        $containsProcedureDefinition = $false
+
+        foreach ($procedureFilePath in @($procedureExportResult.ExportedFiles)) {
+            Assert-Condition `
+                -Condition (-not [string]::IsNullOrWhiteSpace([string]$procedureFilePath)) `
+                -Message 'ExportedFiles contains an empty path value.'
+
+            Assert-Condition `
+                -Condition (Test-Path -LiteralPath $procedureFilePath -PathType Leaf) `
+                -Message "Exported stored procedure file does not exist: $procedureFilePath"
+
+            $procedureFileContent = Get-Content -LiteralPath $procedureFilePath -Raw
+
+            Assert-Condition `
+                -Condition (-not [string]::IsNullOrWhiteSpace($procedureFileContent)) `
+                -Message "Exported stored procedure file is empty: $procedureFilePath"
+
+            if ($procedureFileContent -match 'CREATE\s+PROCEDURE|ALTER\s+PROCEDURE') {
+                $containsProcedureDefinition = $true
+            }
+        }
+
+        Assert-Condition `
+            -Condition ($containsProcedureDefinition) `
+            -Message 'No exported stored procedure file contains CREATE PROCEDURE or ALTER PROCEDURE.'
+    }
+    else {
+        Write-TestStatus -Status WARN -Message 'Export-StoredProcedures found no user stored procedures to export.'
+    }
+}
+
+Invoke-TestStep -Name 'Export-Functions' -ScriptBlock {
+    if (-not (Get-Command -Name Export-Functions -ErrorAction SilentlyContinue)) {
+        Skip-TestStep -Message 'Export-Functions function was not found.'
+    }
+
+    if ($null -eq $script:connection) {
+        Skip-TestStep -Message 'Connect-SqlDatabase did not produce a valid connection object.'
+    }
+
+    $functionExportResult = Export-Functions `
+        -Connection $script:connection `
+        -OutputFolder $script:resolvedOutputFolder
+
+    $functionsFolderPath = Join-Path $script:resolvedOutputFolder 'Functions'
+
+    Assert-Condition `
+        -Condition (Test-Path -LiteralPath $functionsFolderPath -PathType Container) `
+        -Message "Functions folder was not created: $functionsFolderPath"
+
+    Assert-Condition `
+        -Condition ($null -ne $functionExportResult) `
+        -Message 'Export-Functions returned null.'
+
+    Assert-Condition `
+        -Condition ($null -ne $functionExportResult.PSObject.Properties['FunctionCount']) `
+        -Message 'Export-Functions result does not include FunctionCount.'
+
+    Assert-Condition `
+        -Condition ($null -ne $functionExportResult.PSObject.Properties['OutputFolder']) `
+        -Message 'Export-Functions result does not include OutputFolder.'
+
+    Assert-Condition `
+        -Condition ($null -ne $functionExportResult.PSObject.Properties['ExportedFiles']) `
+        -Message 'Export-Functions result does not include ExportedFiles.'
+
+    if ([int]$functionExportResult.FunctionCount -gt 0) {
+        $functionFiles = @(Get-ChildItem -LiteralPath $functionsFolderPath -Filter '*.sql' -File)
+
+        Assert-Condition `
+            -Condition ($functionFiles.Count -gt 0) `
+            -Message "No function files were exported to: $functionsFolderPath"
+
+        $containsFunctionDefinition = $false
+
+        foreach ($functionFilePath in @($functionExportResult.ExportedFiles)) {
+            Assert-Condition `
+                -Condition (-not [string]::IsNullOrWhiteSpace([string]$functionFilePath)) `
+                -Message 'ExportedFiles contains an empty path value.'
+
+            Assert-Condition `
+                -Condition (Test-Path -LiteralPath $functionFilePath -PathType Leaf) `
+                -Message "Exported function file does not exist: $functionFilePath"
+
+            $functionFileContent = Get-Content -LiteralPath $functionFilePath -Raw
+
+            Assert-Condition `
+                -Condition (-not [string]::IsNullOrWhiteSpace($functionFileContent)) `
+                -Message "Exported function file is empty: $functionFilePath"
+
+            if ($functionFileContent -match 'CREATE\s+FUNCTION|ALTER\s+FUNCTION') {
+                $containsFunctionDefinition = $true
+            }
+        }
+
+        Assert-Condition `
+            -Condition ($containsFunctionDefinition) `
+            -Message 'No exported function file contains CREATE FUNCTION or ALTER FUNCTION.'
+    }
+    else {
+        Write-TestStatus -Status WARN -Message 'Export-Functions found no user functions to export.'
+    }
 }
 
 Write-Host ''

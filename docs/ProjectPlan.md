@@ -40,26 +40,24 @@ All PowerShell code should:
 ---
 
 # Current Development State
+Milestone 2 - Regression Framework
 
-Milestone 1 - Configuration Subsystem
+✅ Test-FoundationRegression
 
-✅ Initialize-ExportProfile
-✅ Read-ExportProfile
-✅ Test-ExportDependencies
+Purpose:
 
-Status:
-Complete enough to support development.
+Provide a single command that validates all completed
+export features against a configured database.
 
-Known deferred issues:
+Current coverage:
 
-- Read-ExportProfile validation formatting
-- Review if Test-ExportProfile is necessary
+*
 
 Current Sprint:
-Sprint 1 - Foundation
+Sprint 2
 
 Current Milestone:
-Connect-SqlDatabase
+Core Object Export
 
 Completed:
 
@@ -75,20 +73,20 @@ Completed:
 ✅ exportinfo.json
 ✅ export.log (assumed working)
 ✅ Export-DatabaseProperties
+✅ Export-Schemas
+✅ Export-Tables
+✅ Export-Views
+✅ Export-StoredProcedures
+✅ Export-Functions
 
 Current Feature:
 
-Export Schemas
+Export-Triggers
 
 Next Features:
 
-- Tables
-- Views
-- Stored Procedures
-- Functions
-- Triggers
-- Synonyms
-- Sequences
+Export-Synonyms
+Export-Sequences
 
 Known Deferred Issues:
 
@@ -96,9 +94,6 @@ Known Deferred Issues:
 - Review need for Test-ExportProfile
 
 Future functionality is intentionally out of scope until this feature is completed.
-
-Bug List
-Test-ExportDependencies: The property 'Count' cannot be found on this object.
 
 ---
 
@@ -595,24 +590,33 @@ Controlled entirely through YAML.
 ✅ Project skeleton
 ✅ Logging
 ✅ Export profile schema
+✅ Get-DefaultExportProfileContent
 ✅ Initialize-ExportProfile
-🔄 Get-DefaultExportProfileContent
-⏳ Read-ExportProfile
-⏳ exportinfo.json
-⏳ export.log
+✅ Read-ExportProfile
+✅ Test-ExportDependencies
+✅ Connect-SqlDatabase
+✅ exportinfo.json
+✅ export.log
+✅ Export-DatabaseProperties
+✅ Export-Schemas
+✅ Export-Tables
+✅ Test-FoundationRegression
 
 ## Sprint 2 - Core Export
 
-- Connect-SqlDatabase
-- Validate server exists
-- Validate database exists
-- Return connection objec
+✅ Connect-SqlDatabase
+✅ Validate server exists
+✅ Validate database exists
+✅ Return connection object
+✅ Export-Schemas
+✅ Export-Tables
 
-- Export schemas
-- Export tables
-- Export views
-- Export procedures
-- Export functions
+⏳ Export-Milestone 
+⏳ Export-Procedures
+⏳ Export-Functions
+⏳ Export-Triggers
+⏳ Export-Synonyms
+⏳ Export-Sequences
 
 ## Sprint 3 - Dependency Data
 
@@ -654,6 +658,30 @@ Controlled entirely through YAML.
 - Export dependency status to exportinfo.json
 - Known cosmetic defect: Read-ExportProfile validation report formatting
  - Test-ExportProfile: decide if necessary
+
+# Future Analysis Features Wishlist
+
+These features are intentionally outside the MVP scope.
+They may require additional SQL queries, performance data, or analysis beyond object export.
+
+These items should not influence current architecture unless
+they can be implemented cleanly after the core exporter is complete.
+
+## Naming Convention Analysis
+
+Report:
+
+- Tables without primary keys
+- Non-standard constraint names
+- Generic index names
+- Objects using reserved words
+- Objects with spaces
+- Mixed naming standards
+
+Output:
+
+Analysis\
+    NamingStandards.md
 
 # Known Issues
 
@@ -728,7 +756,35 @@ BannerProd
     ├── dependencies.dot
     ├── dependencies.svg
     └── dependencies.html
-    
+
 ```
 
 ---
+
+# Future Analysis Features Wishlist
+
+## Performance
+
+- Missing Index Recommendations
+- Index Health Analysis
+- View Optimization Analysis
+
+## Upgrade Readiness
+
+- Deprecated Feature Analysis
+- Upgrade Readiness Report
+
+## Security
+
+- Security Risk Analysis
+
+## Data Integrity
+
+- Foreign Key Trust Analysis
+- Constraint Health Analysis
+
+## Dependency Analysis
+
+- Change Impact Analysis
+- Orphaned Object Analysis
+
