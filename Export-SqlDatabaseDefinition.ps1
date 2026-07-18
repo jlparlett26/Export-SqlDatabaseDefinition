@@ -27,6 +27,7 @@ $ErrorActionPreference = 'Stop'
 $script:ScriptVersion = '0.1.0'
 $script:ProjectRoot = $PSScriptRoot
 $script:DefaultConfigFileName = 'export.yaml'
+$script:LogFilePath = $null
 
 function Get-ScriptVersion {
     <#
@@ -47,6 +48,52 @@ function Get-ScriptVersion {
 #endregion
 
 #region Logging
+function Initialize-ExportLog {
+    <#
+    .SYNOPSIS
+        Initializes export.log for the current export session.
+
+    .DESCRIPTION
+        Validates the output folder, ensures export.log exists inside that folder,
+        stores the resolved file path in script scope, and returns the log file path.
+
+    .PARAMETER OutputFolder
+        Target export folder that will contain export.log.
+
+    .OUTPUTS
+        System.String
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$OutputFolder
+    )
+
+    if ([string]::IsNullOrWhiteSpace($OutputFolder)) {
+        throw [System.ArgumentException]::new('OutputFolder cannot be null, empty, or whitespace.')
+    }
+
+    $resolvedOutputFolder = [System.IO.Path]::GetFullPath($OutputFolder.Trim())
+
+    if (-not (Test-Path -LiteralPath $resolvedOutputFolder -PathType Container)) {
+        throw [System.IO.DirectoryNotFoundException]::new(("Output folder does not exist: {0}" -f $resolvedOutputFolder))
+    }
+
+    $resolvedLogFilePath = [System.IO.Path]::Combine($resolvedOutputFolder, 'export.log')
+
+    if (Test-Path -LiteralPath $resolvedLogFilePath) {
+        if (-not (Test-Path -LiteralPath $resolvedLogFilePath -PathType Leaf)) {
+            throw [System.InvalidOperationException]::new(("Log path exists but is not a file: {0}" -f $resolvedLogFilePath))
+        }
+    }
+    else {
+        [System.IO.File]::WriteAllText($resolvedLogFilePath, [string]::Empty, [System.Text.UTF8Encoding]::new($false))
+    }
+
+    $script:LogFilePath = $resolvedLogFilePath
+    return $script:LogFilePath
+}
+
 function Write-Log {
     <#
     .SYNOPSIS
@@ -93,6 +140,19 @@ function Write-Log {
         'Warning' { Write-Warning -Message $formattedMessage }
         'Error' { Write-Error -Message $formattedMessage }
         default { Write-Output $formattedMessage }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($script:LogFilePath) -and (Test-Path -LiteralPath $script:LogFilePath -PathType Leaf)) {
+        try {
+            [System.IO.File]::AppendAllText(
+                $script:LogFilePath,
+                $formattedMessage + [Environment]::NewLine,
+                [System.Text.UTF8Encoding]::new($false)
+            )
+        }
+        catch {
+            Write-Warning -Message ("Failed to write to export.log: {0}" -f $_.Exception.Message)
+        }
     }
 }
 #endregion
@@ -498,20 +558,411 @@ function Connect-SqlDatabase {
         Connects to a SQL Server database.
 
     .DESCRIPTION
-        Placeholder function for future connection logic.
+        Validates SQL Server connection settings from the parsed export profile,
+        establishes a Windows-authenticated connection to the target SQL Server
+        instance, and confirms that the configured database exists.
+
+    .PARAMETER Config
+        Parsed export profile configuration dictionary.
+
+    .EXAMPLE
+        Connect-SqlDatabase -Config $config
 
     .OUTPUTS
         System.Object
     #>
     [CmdletBinding()]
-    param()
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Collections.IDictionary]$Config
+    )
 
-    Write-Verbose 'Connect-SqlDatabase is not implemented.'
-    return $null
+    try {
+        if ($null -eq $Config) {
+            throw [System.InvalidOperationException]::new('Config cannot be null.')
+        }
+
+        if (-not $Config.Contains('connection')) {
+            throw [System.InvalidOperationException]::new('Connection section is missing from export.yaml.')
+        }
+
+        $connection = $Config['connection']
+        if ($null -eq $connection -or $connection -isnot [System.Collections.IDictionary]) {
+            throw [System.InvalidOperationException]::new('Connection section is invalid in export.yaml.')
+        }
+
+        if (-not $connection.Contains('server')) {
+            throw [System.InvalidOperationException]::new('Missing connection.server in export.yaml.')
+        }
+
+        if (-not $connection.Contains('database')) {
+            throw [System.InvalidOperationException]::new('Missing connection.database in export.yaml.')
+        }
+
+        if (-not $connection.Contains('authentication')) {
+            throw [System.InvalidOperationException]::new('Missing connection.authentication in export.yaml.')
+        }
+
+        $serverName = [string]$connection['server']
+        $databaseName = [string]$connection['database']
+        $authentication = [string]$connection['authentication']
+
+        if ([string]::IsNullOrWhiteSpace($serverName)) {
+            throw [System.InvalidOperationException]::new('Server name is missing from export.yaml.')
+        }
+
+        if ([string]::IsNullOrWhiteSpace($databaseName)) {
+            throw [System.InvalidOperationException]::new('Database name is missing from export.yaml.')
+        }
+
+        if ($serverName.Trim() -ieq 'CHANGE_ME') {
+            throw [System.InvalidOperationException]::new('Server value is still CHANGE_ME.')
+        }
+
+        if ($databaseName.Trim() -ieq 'CHANGE_ME') {
+            throw [System.InvalidOperationException]::new('Database value is still CHANGE_ME.')
+        }
+
+        if ([string]::IsNullOrWhiteSpace($authentication)) {
+            throw [System.InvalidOperationException]::new('Authentication mode is missing from export.yaml.')
+        }
+
+        if ($authentication.Trim() -ine 'Windows') {
+            throw [System.InvalidOperationException]::new('Only Windows authentication is currently supported.')
+        }
+
+        Write-Log -Level Information -Message 'Starting SQL connection'
+        Write-Log -Level Information -Message ("Server name: {0}" -f $serverName)
+        Write-Log -Level Information -Message ("Database name: {0}" -f $databaseName)
+        Write-Log -Level Information -Message ("Authentication mode: {0}" -f $authentication)
+
+        $sqlServerModule = Get-Module -ListAvailable -Name 'SqlServer' | Select-Object -First 1
+        if ($null -eq $sqlServerModule) {
+            Import-Module SqlServer -ErrorAction SilentlyContinue
+            $sqlServerModule = Get-Module -ListAvailable -Name 'SqlServer' | Select-Object -First 1
+        }
+
+        if ($null -eq $sqlServerModule) {
+            throw [System.InvalidOperationException]::new((
+                'SQL Server connectivity requires the SqlServer PowerShell module.' + [Environment]::NewLine +
+                'Install it with:' + [Environment]::NewLine +
+                'Install-Module SqlServer -Scope CurrentUser'
+            ))
+        }
+
+        if (-not ('Microsoft.SqlServer.Management.Smo.Server' -as [Type])) {
+            Import-Module SqlServer -ErrorAction SilentlyContinue
+        }
+
+        if (-not ('Microsoft.SqlServer.Management.Smo.Server' -as [Type])) {
+            throw [System.InvalidOperationException]::new((
+                'SQL Server connectivity requires the SqlServer PowerShell module.' + [Environment]::NewLine +
+                'Install it with:' + [Environment]::NewLine +
+                'Install-Module SqlServer -Scope CurrentUser'
+            ))
+        }
+
+        try {
+            $server = New-Object Microsoft.SqlServer.Management.Smo.Server($serverName)
+            $server.ConnectionContext.LoginSecure = $true
+            $server.ConnectionContext.Connect()
+        }
+        catch {
+            throw [System.InvalidOperationException]::new(("Could not connect to SQL Server: {0}" -f $serverName))
+        }
+
+        Write-Log -Level Information -Message 'Connection successful'
+
+        $database = $server.Databases[$databaseName]
+        if ($null -eq $database) {
+            throw [System.InvalidOperationException]::new(("Database was not found on the server: {0}" -f $databaseName))
+        }
+
+        Write-Log -Level Information -Message 'Database found'
+
+        return [PSCustomObject]@{
+            ServerName = $serverName
+            DatabaseName = $databaseName
+            Authentication = $authentication
+            Connected = $true
+            ServerObject = $server
+            DatabaseObject = $database
+        }
+    }
+    catch {
+        Write-Log -Level Error -Message ('Connection failure') -ErrorAction Continue
+        throw
+    }
 }
 #endregion
 
 #region Database Export Functions
+function Write-ExportInfo {
+    <#
+    .SYNOPSIS
+        Writes export metadata to exportinfo.json.
+
+    .DESCRIPTION
+        Creates or overwrites exportinfo.json in the specified export folder using
+        the active configuration and SQL connection result.
+
+    .PARAMETER Config
+        Parsed export profile configuration dictionary.
+
+    .PARAMETER Connection
+        Connection result returned by Connect-SqlDatabase.
+
+    .PARAMETER OutputFolder
+        Target export folder that will contain exportinfo.json.
+
+    .OUTPUTS
+        System.String
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Collections.IDictionary]$Config,
+
+        [Parameter(Mandatory = $true)]
+        [object]$Connection,
+
+        [Parameter(Mandatory = $true)]
+        [string]$OutputFolder
+    )
+
+    try {
+        if ($null -eq $Config) {
+            throw [System.InvalidOperationException]::new('Config cannot be null.')
+        }
+
+        if ($null -eq $Connection) {
+            throw [System.InvalidOperationException]::new('Connection cannot be null.')
+        }
+
+        if ([string]::IsNullOrWhiteSpace($OutputFolder)) {
+            throw [System.InvalidOperationException]::new('OutputFolder cannot be null, empty, or whitespace.')
+        }
+
+        $resolvedOutputFolder = [System.IO.Path]::GetFullPath($OutputFolder.Trim())
+        if (-not (Test-Path -LiteralPath $resolvedOutputFolder -PathType Container)) {
+            throw [System.InvalidOperationException]::new(("OutputFolder does not exist: {0}" -f $resolvedOutputFolder))
+        }
+
+        $requiredConnectionProperties = @('ServerName', 'DatabaseName', 'Authentication', 'Connected', 'ServerObject', 'DatabaseObject')
+        foreach ($propertyName in $requiredConnectionProperties) {
+            $connectionProperty = $Connection.PSObject.Properties[$propertyName]
+            if ($null -eq $connectionProperty) {
+                throw [System.InvalidOperationException]::new(("Connection result is missing required property: {0}" -f $propertyName))
+            }
+        }
+
+        if (-not [bool]$Connection.Connected) {
+            throw [System.InvalidOperationException]::new('Connection.Connected must be true.')
+        }
+
+        if ($null -eq $Connection.DatabaseObject) {
+            throw [System.InvalidOperationException]::new('Connection.DatabaseObject cannot be null.')
+        }
+
+        Write-Log -Level Information -Message 'Starting exportinfo.json creation'
+
+        $exportInfoPath = [System.IO.Path]::Combine($resolvedOutputFolder, 'exportinfo.json')
+        Write-Log -Level Information -Message ("Output path: {0}" -f $exportInfoPath)
+
+        $databaseObject = $Connection.DatabaseObject
+
+        $getDatabaseProperty = {
+            param(
+                [Parameter(Mandatory = $true)]
+                [object]$Object,
+
+                [Parameter(Mandatory = $true)]
+                [string]$PropertyName
+            )
+
+            try {
+                $property = $Object.PSObject.Properties[$PropertyName]
+                if ($null -eq $property) {
+                    return $null
+                }
+
+                return $property.Value
+            }
+            catch {
+                return $null
+            }
+        }
+
+        $createDateValue = & $getDatabaseProperty -Object $databaseObject -PropertyName 'CreateDate'
+        if ($null -ne $createDateValue -and $createDateValue -is [datetime]) {
+            $createDateValue = $createDateValue.ToString('o')
+        }
+
+        $compatibilityLevelValue = & $getDatabaseProperty -Object $databaseObject -PropertyName 'CompatibilityLevel'
+        if ($null -ne $compatibilityLevelValue) {
+            $compatibilityLevelValue = [string]$compatibilityLevelValue
+        }
+
+        $recoveryModelValue = & $getDatabaseProperty -Object $databaseObject -PropertyName 'RecoveryModel'
+        if ($null -ne $recoveryModelValue) {
+            $recoveryModelValue = [string]$recoveryModelValue
+        }
+
+        $exportInfo = [ordered]@{
+            toolName = 'Export-SqlDatabaseDefinition'
+            toolVersion = Get-ScriptVersion
+            exportedAt = [DateTimeOffset]::UtcNow.ToString('o')
+            serverName = [string]$Connection.ServerName
+            databaseName = [string]$Connection.DatabaseName
+            authentication = [string]$Connection.Authentication
+            connected = [bool]$Connection.Connected
+            databaseProperties = [ordered]@{
+                name = (& $getDatabaseProperty -Object $databaseObject -PropertyName 'Name')
+                id = (& $getDatabaseProperty -Object $databaseObject -PropertyName 'ID')
+                createDate = $createDateValue
+                compatibilityLevel = $compatibilityLevelValue
+                collation = (& $getDatabaseProperty -Object $databaseObject -PropertyName 'Collation')
+                recoveryModel = $recoveryModelValue
+                owner = (& $getDatabaseProperty -Object $databaseObject -PropertyName 'Owner')
+            }
+        }
+
+        $json = $exportInfo | ConvertTo-Json -Depth 6
+        [System.IO.File]::WriteAllText($exportInfoPath, $json, [System.Text.UTF8Encoding]::new($false))
+
+        Write-Log -Level Information -Message 'exportinfo.json written successfully'
+        return $exportInfoPath
+    }
+    catch {
+        Write-Log -Level Error -Message ('Error creating exportinfo.json: {0}' -f $_.Exception.Message) -ErrorAction Continue
+        throw [System.InvalidOperationException]::new(('Failed to create exportinfo.json. {0}' -f $_.Exception.Message))
+    }
+}
+
+function Export-DatabaseProperties {
+    <#
+    .SYNOPSIS
+        Exports database-level properties to Database\Database.sql.
+
+    .DESCRIPTION
+        Creates the Database folder in the export output path when needed and writes
+        deterministic database metadata comments using the active SQL connection.
+
+    .PARAMETER Connection
+        Connection result returned by Connect-SqlDatabase.
+
+    .PARAMETER OutputFolder
+        Target export folder.
+
+    .OUTPUTS
+        System.String
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Connection,
+
+        [Parameter(Mandatory = $true)]
+        [string]$OutputFolder
+    )
+
+    try {
+        if ($null -eq $Connection) {
+            throw [System.InvalidOperationException]::new('Connection cannot be null.')
+        }
+
+        if (-not [bool]$Connection.Connected) {
+            throw [System.InvalidOperationException]::new('Connection.Connected must be true.')
+        }
+
+        if ($null -eq $Connection.DatabaseObject) {
+            throw [System.InvalidOperationException]::new('Connection.DatabaseObject cannot be null.')
+        }
+
+        if ([string]::IsNullOrWhiteSpace($OutputFolder)) {
+            throw [System.InvalidOperationException]::new('OutputFolder cannot be null, empty, or whitespace.')
+        }
+
+        $resolvedOutputFolder = [System.IO.Path]::GetFullPath($OutputFolder.Trim())
+        if (-not (Test-Path -LiteralPath $resolvedOutputFolder -PathType Container)) {
+            throw [System.InvalidOperationException]::new(("OutputFolder does not exist: {0}" -f $resolvedOutputFolder))
+        }
+
+        Write-Log -Level Information -Message 'Starting Database Properties export'
+
+        $databaseFolder = [System.IO.Path]::Combine($resolvedOutputFolder, 'Database')
+        if (-not (Test-Path -LiteralPath $databaseFolder -PathType Container)) {
+            New-Item -ItemType Directory -Path $databaseFolder -Force | Out-Null
+        }
+
+        $databaseSqlPath = [System.IO.Path]::Combine($databaseFolder, 'Database.sql')
+        Write-Log -Level Information -Message ("Output path: {0}" -f $databaseSqlPath)
+
+        $database = $Connection.DatabaseObject
+
+        $getDatabaseProperty = {
+            param(
+                [Parameter(Mandatory = $true)]
+                [object]$Object,
+
+                [Parameter(Mandatory = $true)]
+                [string]$PropertyName
+            )
+
+            try {
+                $property = $Object.PSObject.Properties[$PropertyName]
+                if ($null -eq $property) {
+                    return $null
+                }
+
+                return $property.Value
+            }
+            catch {
+                return $null
+            }
+        }
+
+        $nameValue = & $getDatabaseProperty -Object $database -PropertyName 'Name'
+        $idValue = & $getDatabaseProperty -Object $database -PropertyName 'ID'
+        $createDateValue = & $getDatabaseProperty -Object $database -PropertyName 'CreateDate'
+        $compatibilityLevelValue = & $getDatabaseProperty -Object $database -PropertyName 'CompatibilityLevel'
+        $collationValue = & $getDatabaseProperty -Object $database -PropertyName 'Collation'
+        $recoveryModelValue = & $getDatabaseProperty -Object $database -PropertyName 'RecoveryModel'
+        $ownerValue = & $getDatabaseProperty -Object $database -PropertyName 'Owner'
+
+        if ($null -ne $createDateValue -and $createDateValue -is [datetime]) {
+            $createDateValue = $createDateValue.ToString('o')
+        }
+
+        if ($null -ne $compatibilityLevelValue) {
+            $compatibilityLevelValue = [string]$compatibilityLevelValue
+        }
+
+        if ($null -ne $recoveryModelValue) {
+            $recoveryModelValue = [string]$recoveryModelValue
+        }
+
+        $content = @(
+            ('-- Database Name: {0}' -f [string]$nameValue),
+            ('-- Database Id: {0}' -f [string]$idValue),
+            ('-- Create Date: {0}' -f [string]$createDateValue),
+            ('-- Compatibility Level: {0}' -f [string]$compatibilityLevelValue),
+            ('-- Collation: {0}' -f [string]$collationValue),
+            ('-- Recovery Model: {0}' -f [string]$recoveryModelValue),
+            ('-- Owner: {0}' -f [string]$ownerValue)
+        ) -join [Environment]::NewLine
+
+        [System.IO.File]::WriteAllText($databaseSqlPath, $content, [System.Text.UTF8Encoding]::new($false))
+
+        Write-Log -Level Information -Message 'Database.sql created successfully'
+        return $databaseSqlPath
+    }
+    catch {
+        Write-Log -Level Error -Message ('Database export failed: {0}' -f $_.Exception.Message) -ErrorAction Continue
+        throw [System.InvalidOperationException]::new(('Failed to export database properties. {0}' -f $_.Exception.Message))
+    }
+}
+
 function Export-SqlDatabaseDefinition {
     <#
     .SYNOPSIS
@@ -574,8 +1025,8 @@ function Test-ExportDependencies {
             Name = 'SqlServer'
             Required = $false
             InstallCommand = 'Install-Module SqlServer -Scope CurrentUser'
-            Notes = 'Get-Module SqlServer -ListAvailable'
-            Validation = 'SqlServer module'
+            Notes = 'Optional for current milestone; required before Connect-SqlDatabase can succeed. Validate with: Get-Module SqlServer -ListAvailable'
+            Validation = 'SqlServer module availability for future SQL connectivity'
         },
         [PSCustomObject]@{
             Name = 'Graphviz'
@@ -651,15 +1102,15 @@ function Test-ExportDependencies {
                 if ($null -ne $sqlServerModule) {
                     $isInstalled = $true
                     $detail.Installed = $true
-                    $detail.Message = 'PASS: SqlServer'
+                    $detail.Message = 'PASS: SqlServer (ready for upcoming Connect-SqlDatabase milestone)'
                     $installedDependencies.Add('SqlServer')
-                    Write-Log -Level Information -Message 'PASS: SqlServer'
+                    Write-Log -Level Information -Message 'PASS: SqlServer (ready for upcoming Connect-SqlDatabase milestone)'
                 }
                 else {
-                    $detail.Message = 'INFO: SqlServer not installed (optional)'
+                    $detail.Message = 'INFO: SqlServer not installed (optional today; required before Connect-SqlDatabase can succeed). Install-Module SqlServer -Scope CurrentUser'
                     $missingDependencies.Add($dependency.Name)
                     $installCommands.Add($dependency.InstallCommand)
-                    Write-Log -Level Information -Message 'INFO: SqlServer not installed (optional)'
+                    Write-Log -Level Information -Message 'INFO: SqlServer not installed (optional today; required before Connect-SqlDatabase can succeed)'
                     Write-Log -Level Information -Message ("Install: {0}" -f $dependency.InstallCommand)
                 }
             }
@@ -691,8 +1142,16 @@ function Test-ExportDependencies {
 
     Write-Log -Level Information -Message 'Dependency Check Complete'
 
+    $missingRequiredDependencies = @(
+        $dependencyDetails | Where-Object {
+            $_.Required -eq $true -and $_.Installed -ne $true
+        }
+    )
+
+    $isValid = ($missingRequiredDependencies.Count -eq 0)
+
     return [PSCustomObject]@{
-        IsValid = (($dependencyDetails | Where-Object { $_.Required -and -not $_.Installed }).Count -eq 0)
+        IsValid = $isValid
         InstalledDependencies = @($installedDependencies)
         MissingDependencies = @($missingDependencies)
         InstallCommands = @($installCommands)

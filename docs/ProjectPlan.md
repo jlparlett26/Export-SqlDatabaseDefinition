@@ -69,14 +69,26 @@ Completed:
 ✅ Get-DefaultExportProfileContent
 ✅ Initialize-ExportProfile
 ✅ Read-ExportProfile
-✅ Test-ExportDepende
+✅ Test-ExportDependencies (functionality complete)
+✅ Test-ExportDependencies Count-property bug
+✅ Connect-SqlDatabase
+✅ exportinfo.json
+✅ export.log (assumed working)
+✅ Export-DatabaseProperties
 
+Current Feature:
+
+Export Schemas
 
 Next Features:
 
-⏳ Connect-SqlDatabase
-⏳ exportinfo.json
-⏳ export.log
+- Tables
+- Views
+- Stored Procedures
+- Functions
+- Triggers
+- Synonyms
+- Sequences
 
 Known Deferred Issues:
 
@@ -84,6 +96,9 @@ Known Deferred Issues:
 - Review need for Test-ExportProfile
 
 Future functionality is intentionally out of scope until this feature is completed.
+
+Bug List
+Test-ExportDependencies: The property 'Count' cannot be found on this object.
 
 ---
 
