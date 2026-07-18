@@ -41,31 +41,47 @@ All PowerShell code should:
 
 # Current Development State
 
+Milestone 1 - Configuration Subsystem
+
+✅ Initialize-ExportProfile
+✅ Read-ExportProfile
+✅ Test-ExportDependencies
+
+Status:
+Complete enough to support development.
+
+Known deferred issues:
+
+- Read-ExportProfile validation formatting
+- Review if Test-ExportProfile is necessary
+
 Current Sprint:
 Sprint 1 - Foundation
 
-Current Feature:
-Get-DefaultExportProfileContent
+Current Milestone:
+Connect-SqlDatabase
 
 Completed:
 
-✅ Project Skeleton
-✅ Logging Framework
-✅ YAML Schema
+✅ Project skeleton
+✅ Logging
+✅ Export profile schema
 ✅ Get-DefaultExportProfileContent
 ✅ Initialize-ExportProfile
 ✅ Read-ExportProfile
+✅ Test-ExportDepende
 
-In Progress:
-
-🔄 Test-ExportDependencies
-🔄 Get-DefaultExportProfileContent
 
 Next Features:
 
-⏳ Test-ExportProfile
+⏳ Connect-SqlDatabase
 ⏳ exportinfo.json
 ⏳ export.log
+
+Known Deferred Issues:
+
+- Read-ExportProfile validation report formatting
+- Review need for Test-ExportProfile
 
 Future functionality is intentionally out of scope until this feature is completed.
 
@@ -572,7 +588,11 @@ Controlled entirely through YAML.
 
 ## Sprint 2 - Core Export
 
-- Connect to SQL Server
+- Connect-SqlDatabase
+- Validate server exists
+- Validate database exists
+- Return connection objec
+
 - Export schemas
 - Export tables
 - Export views
@@ -617,6 +637,19 @@ Controlled entirely through YAML.
 - Allow developers to load functions without running the exporter.
 - Generate dependency report from Test-ExportDependencies
 - Export dependency status to exportinfo.json
+- Known cosmetic defect: Read-ExportProfile validation report formatting
+ - Test-ExportProfile: decide if necessary
+
+# Known Issues
+
+Read-ExportProfile currently reports validation failures correctly but does not
+properly render the detailed validation list.
+
+The validation logic is correct.
+
+Only the formatting of the error report needs improvement.
+
+Deferred to Sprint 8.
 
 ---
 

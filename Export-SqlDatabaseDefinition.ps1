@@ -164,7 +164,7 @@ dependencies:
 referenceData:
 
   enabled: false
-  # Add validation that tables is acutally a collection of table names, and that each table name is a string.
+  # Tables whose reference data should be exported
   tables: []
 '@
 }
@@ -257,6 +257,8 @@ function Read-ExportProfile {
         [ValidateNotNullOrEmpty()]
         [string]$Path
     )
+
+    $resolvedPath = $null
 
     try {
         if ([string]::IsNullOrWhiteSpace($Path)) {
@@ -368,11 +370,18 @@ function Read-ExportProfile {
                         $invalidValues.Add('Invalid value: referenceData.tables must be a collection of strings. Found a mapping object.')
                     }
                     elseif ($tablesValue -is [System.Collections.IEnumerable]) {
+                        $entryIndex = 0
                         foreach ($tableEntry in $tablesValue) {
                             if ($tableEntry -isnot [string]) {
                                 $entryType = if ($null -eq $tableEntry) { 'null' } else { $tableEntry.GetType().FullName }
-                                $invalidValues.Add(("Invalid value: referenceData.tables contains a non-string entry ({0})." -f $entryType))
+                                $invalidValues.Add(("Invalid value: referenceData.tables[{0}] must be a string. Found {1}." -f $entryIndex, $entryType))
                             }
+
+                            if ($tableEntry -is [string] -and [string]::IsNullOrWhiteSpace($tableEntry)) {
+                                $invalidValues.Add(("Invalid value: referenceData.tables[{0}] cannot be empty or whitespace." -f $entryIndex))
+                            }
+
+                            $entryIndex++
                         }
                     }
                     else {
@@ -397,25 +406,36 @@ function Read-ExportProfile {
                 $problemLines.Add(("  - {0}" -f $invalid))
             }
 
+            $problemText = $problemLines -join [Environment]::NewLine
+
+            $validationSummary = 'Validation failed: {0} missing section(s), {1} missing propertie(s), {2} invalid value(s).' -f $missingSections.Count, $missingProperties.Count, $invalidValues.Count
+
             $message = @(
                 'Configuration validation failed.',
                 '',
                 'File:',
-                $resolvedPath,
+                ('    {0}' -f $resolvedPath),
                 '',
                 'Problems found:',
-                $problemLines,
+                $problemText,
                 '',
                 'Suggested actions:',
                 '  Option 1:',
                 '    Correct the configuration manually.',
                 '  Option 2:',
-                '    Delete export.yaml and rerun the exporter to generate a new template.',
+                '    Delete export.yaml and rerun the exporter.',
+                '    The exporter will generate a new default template.',
                 '',
                 'Validation aborted.'
             ) -join [Environment]::NewLine
 
-            Write-Log -Level Error -Message ('Validation errors: {0}' -f $resolvedPath)
+            $logMessage = @(
+                $validationSummary,
+                '',
+                $message
+            ) -join [Environment]::NewLine
+
+            Write-Log -Level Error -Message $logMessage -ErrorAction Continue
             throw [System.InvalidOperationException]::new($message)
         }
 
@@ -428,25 +448,46 @@ function Read-ExportProfile {
             throw
         }
 
+        $displayPath = if ([string]::IsNullOrWhiteSpace($resolvedPath)) { $Path } else { $resolvedPath }
+
+        $problemDescription = switch -Regex ($_.Exception.GetType().FullName) {
+            'FileNotFoundException' { 'The configuration file does not exist at the specified path.'; break }
+            'DirectoryNotFoundException' { 'The configuration file path is invalid or inaccessible.'; break }
+            'UnauthorizedAccessException' { 'The configuration file cannot be accessed due to permissions.'; break }
+            'ArgumentException' { 'The configuration path or file type is invalid. Use a .yaml or .yml file.'; break }
+            default {
+                if ($_.Exception.Message -match 'YAML parsing requires a command named ConvertFrom-Yaml') {
+                    'YAML parsing support is unavailable. Install the required module: Install-Module powershell-yaml -Scope CurrentUser'
+                }
+                elseif ($_.Exception.Message -match 'did not resolve to a dictionary object|YAML document is empty') {
+                    'The configuration file structure is invalid or empty.'
+                }
+                else {
+                    'The configuration file could not be read or parsed. Verify YAML syntax and required sections.'
+                }
+            }
+        }
+
         $friendlyMessage = @(
             'Configuration load failed.',
             '',
             'File:',
-            $resolvedPath,
+            ('    {0}' -f $displayPath),
             '',
             'Problem:',
-            ("  - {0}" -f $_.Exception.Message),
+            ("  - {0}" -f $problemDescription),
             '',
             'Suggested actions:',
             '  Option 1:',
-            '    Verify that export.yaml is valid YAML syntax.',
+            '    Verify that export.yaml exists, is readable, and contains valid YAML syntax.',
             '  Option 2:',
-            '    Delete export.yaml and rerun the exporter to generate a new template.',
+            '    Delete export.yaml and rerun the exporter.',
+            '    The exporter will generate a new default template.',
             '',
             'Validation aborted.'
         ) -join [Environment]::NewLine
 
-        Write-Log -Level Error -Message ('Validation errors: {0}' -f $resolvedPath)
+        Write-Log -Level Error -Message ('Configuration load failed: {0}' -f $displayPath) -ErrorAction Continue
         throw [System.InvalidOperationException]::new($friendlyMessage)
     }
 }
