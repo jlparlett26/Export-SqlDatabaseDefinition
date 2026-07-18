@@ -26,7 +26,7 @@ $ErrorActionPreference = 'Stop'
 #region Configuration
 $script:ScriptVersion = '0.1.0'
 $script:ProjectRoot = $PSScriptRoot
-$script:DefaultProfileName = 'export.yaml'
+$script:DefaultConfigFileName = 'export.yaml'
 
 function Get-ScriptVersion {
     <#
@@ -206,24 +206,24 @@ function Initialize-ExportProfile {
             Write-Log -Level Information -Message ("Folder created: {0}" -f $resolvedOutputFolder)
         }
 
-        $profilePath = [System.IO.Path]::Combine($resolvedOutputFolder, 'export.yaml')
-        $fullProfilePath = [System.IO.Path]::GetFullPath($profilePath)
+        $exportFilePath = [System.IO.Path]::Combine($resolvedOutputFolder, 'export.yaml')
+        $resolvedExportFilePath = [System.IO.Path]::GetFullPath($exportFilePath)
 
-        if (Test-Path -LiteralPath $fullProfilePath -PathType Leaf) {
-            Write-Log -Level Information -Message ("export.yaml already exists: {0}" -f $fullProfilePath)
-            return $fullProfilePath
+        if (Test-Path -LiteralPath $resolvedExportFilePath -PathType Leaf) {
+            Write-Log -Level Information -Message ("export.yaml already exists: {0}" -f $resolvedExportFilePath)
+            return $resolvedExportFilePath
         }
 
-        if (Test-Path -LiteralPath $fullProfilePath) {
-            Write-Log -Level Error -Message ("Path exists but is not a file: {0}" -f $fullProfilePath)
-            throw [System.InvalidOperationException]::new("Path exists but is not a file: $fullProfilePath")
+        if (Test-Path -LiteralPath $resolvedExportFilePath) {
+            Write-Log -Level Error -Message ("Path exists but is not a file: {0}" -f $resolvedExportFilePath)
+            throw [System.InvalidOperationException]::new("Path exists but is not a file: $resolvedExportFilePath")
         }
 
         $defaultYaml = Get-DefaultExportProfileContent
 
-        [System.IO.File]::WriteAllText($fullProfilePath, $defaultYaml, [System.Text.UTF8Encoding]::new($false))
-        Write-Log -Level Information -Message ("export.yaml created: {0}" -f $fullProfilePath)
-        return $fullProfilePath
+        [System.IO.File]::WriteAllText($resolvedExportFilePath, $defaultYaml, [System.Text.UTF8Encoding]::new($false))
+        Write-Log -Level Information -Message ("export.yaml created: {0}" -f $resolvedExportFilePath)
+        return $resolvedExportFilePath
     }
     catch {
         Write-Log -Level Error -Message $_.Exception.Message
@@ -289,13 +289,13 @@ function Read-ExportProfile {
         }
 
         $rawContent = [System.IO.File]::ReadAllText($resolvedPath, [System.Text.UTF8Encoding]::new($false))
-        $profile = ConvertFrom-Yaml -Yaml $rawContent
+        $config = ConvertFrom-Yaml -Yaml $rawContent
 
-        if ($null -eq $profile) {
+        if ($null -eq $config) {
             throw [System.InvalidOperationException]::new('The YAML document is empty.')
         }
 
-        if (-not ($profile -is [System.Collections.IDictionary])) {
+        if (-not ($config -is [System.Collections.IDictionary])) {
             throw [System.InvalidOperationException]::new('The YAML content did not resolve to a dictionary object.')
         }
 
@@ -311,45 +311,47 @@ function Read-ExportProfile {
             'referenceData' = @('enabled', 'tables')
         }
 
-        $errors = [System.Collections.Generic.List[string]]::new()
+        $missingSections = [System.Collections.Generic.List[string]]::new()
+        $missingProperties = [System.Collections.Generic.List[string]]::new()
+        $invalidValues = [System.Collections.Generic.List[string]]::new()
 
         foreach ($scalarName in $requiredScalarValues.Keys) {
-            if (-not $profile.Contains($scalarName)) {
-                $errors.Add(("Missing required scalar value '{0}'." -f $scalarName))
+            if (-not $config.Contains($scalarName)) {
+                $invalidValues.Add(("Missing required value: {0}" -f $scalarName))
                 continue
             }
 
-            $scalarValue = $profile[$scalarName]
+            $scalarValue = $config[$scalarName]
             if ($null -eq $scalarValue) {
-                $errors.Add(("Scalar value '{0}' is null." -f $scalarName))
+                $invalidValues.Add(("Invalid value: {0} cannot be null." -f $scalarName))
                 continue
             }
 
             if (($scalarName -eq 'configVersion') -and ($scalarValue -ne $requiredScalarValues[$scalarName])) {
-                $errors.Add(("Unsupported value for '{0}'. Expected {1}, got {2}." -f $scalarName, $requiredScalarValues[$scalarName], $scalarValue))
+                $invalidValues.Add(("Invalid value: configVersion must be {0}; found {1}." -f $requiredScalarValues[$scalarName], $scalarValue))
             }
         }
 
         foreach ($sectionName in $requiredSections.Keys) {
-            if (-not $profile.Contains($sectionName)) {
-                $errors.Add(("Missing section: {0}" -f $sectionName))
+            if (-not $config.Contains($sectionName)) {
+                $missingSections.Add($sectionName)
                 continue
             }
 
-            $sectionValue = $profile[$sectionName]
+            $sectionValue = $config[$sectionName]
             if ($null -eq $sectionValue) {
-                $errors.Add(("Section '{0}' is null." -f $sectionName))
+                $invalidValues.Add(("Invalid value: section '{0}' cannot be null." -f $sectionName))
                 continue
             }
 
             if (-not ($sectionValue -is [System.Collections.IDictionary])) {
-                $errors.Add(("Section '{0}' must be a mapping object." -f $sectionName))
+                $invalidValues.Add(("Invalid value: section '{0}' must be a mapping object." -f $sectionName))
                 continue
             }
 
             foreach ($propertyName in $requiredSections[$sectionName]) {
                 if (-not $sectionValue.Contains($propertyName)) {
-                    $errors.Add(("Missing property '{0}' in section '{1}'." -f $propertyName, $sectionName))
+                    $missingProperties.Add(("{0}.{1}" -f $sectionName, $propertyName))
                 }
             }
 
@@ -357,28 +359,44 @@ function Read-ExportProfile {
                 if ($sectionValue.Contains('tables')) {
                     $tablesValue = $sectionValue['tables']
                     if ($null -eq $tablesValue) {
-                        $errors.Add("ReferenceData.tables is null. Expected a collection of strings.")
+                        $invalidValues.Add('Invalid value: referenceData.tables cannot be null. Expected a collection of table names.')
                     }
-                    elseif ($tablesValue -is [System.Collections.IEnumerable] -and -not ($tablesValue -is [string])) {
-                        if ($tablesValue -is [System.Collections.IDictionary]) {
-                            $errors.Add("ReferenceData.tables must be a collection of strings. Found a mapping object.")
-                        }
-                        else {
-                            foreach ($tableEntry in $tablesValue) {
-                                if ($tableEntry -isnot [string]) {
-                                    $errors.Add(("ReferenceData.tables contains a non-string entry: {0}" -f $tableEntry))
-                                }
+                    elseif ($tablesValue -is [string]) {
+                        $invalidValues.Add('Invalid value: referenceData.tables must be a collection, not a scalar string.')
+                    }
+                    elseif ($tablesValue -is [System.Collections.IDictionary]) {
+                        $invalidValues.Add('Invalid value: referenceData.tables must be a collection of strings. Found a mapping object.')
+                    }
+                    elseif ($tablesValue -is [System.Collections.IEnumerable]) {
+                        foreach ($tableEntry in $tablesValue) {
+                            if ($tableEntry -isnot [string]) {
+                                $entryType = if ($null -eq $tableEntry) { 'null' } else { $tableEntry.GetType().FullName }
+                                $invalidValues.Add(("Invalid value: referenceData.tables contains a non-string entry ({0})." -f $entryType))
                             }
                         }
                     }
-                    elseif ($tablesValue -isnot [string]) {
-                        $errors.Add(("ReferenceData.tables must be a collection of strings. Found {0}." -f $tablesValue.GetType().FullName))
+                    else {
+                        $invalidValues.Add(("Invalid value: referenceData.tables must be a collection of strings. Found {0}." -f $tablesValue.GetType().FullName))
                     }
                 }
             }
         }
 
-        if ($errors.Count -gt 0) {
+        if (($missingSections.Count -gt 0) -or ($missingProperties.Count -gt 0) -or ($invalidValues.Count -gt 0)) {
+            $problemLines = [System.Collections.Generic.List[string]]::new()
+
+            foreach ($section in $missingSections) {
+                $problemLines.Add(("  - Missing section: {0}" -f $section))
+            }
+
+            foreach ($property in $missingProperties) {
+                $problemLines.Add(("  - Missing property: {0}" -f $property))
+            }
+
+            foreach ($invalid in $invalidValues) {
+                $problemLines.Add(("  - {0}" -f $invalid))
+            }
+
             $message = @(
                 'Configuration validation failed.',
                 '',
@@ -386,7 +404,7 @@ function Read-ExportProfile {
                 $resolvedPath,
                 '',
                 'Problems found:',
-                ($errors | ForEach-Object { "  - {0}" -f $_ }),
+                $problemLines,
                 '',
                 'Suggested actions:',
                 '  Option 1:',
@@ -403,14 +421,33 @@ function Read-ExportProfile {
 
         Write-Log -Level Information -Message ("Configuration file loaded: {0}" -f $resolvedPath)
         Write-Log -Level Information -Message ("Validation successful: {0}" -f $resolvedPath)
-        return $profile
+        return $config
     }
     catch {
-        if ($_.Exception.Message -and $_.Exception.Message -notmatch 'Configuration validation failed') {
-            $message = $_.Exception.Message
-            Write-Log -Level Error -Message ("Validation errors: {0}" -f $message)
+        if ($_.Exception.Message -and $_.Exception.Message -match 'Configuration validation failed') {
+            throw
         }
-        throw
+
+        $friendlyMessage = @(
+            'Configuration load failed.',
+            '',
+            'File:',
+            $resolvedPath,
+            '',
+            'Problem:',
+            ("  - {0}" -f $_.Exception.Message),
+            '',
+            'Suggested actions:',
+            '  Option 1:',
+            '    Verify that export.yaml is valid YAML syntax.',
+            '  Option 2:',
+            '    Delete export.yaml and rerun the exporter to generate a new template.',
+            '',
+            'Validation aborted.'
+        ) -join [Environment]::NewLine
+
+        Write-Log -Level Error -Message ('Validation errors: {0}' -f $resolvedPath)
+        throw [System.InvalidOperationException]::new($friendlyMessage)
     }
 }
 

@@ -133,7 +133,21 @@ SqlServer
 
 Graphviz
     winget install Graphviz.Graphviz
-    
+
+
+## Development Dependencies
+
+PSScriptAnalyzer
+
+Install:
+
+```powershell
+Install-Module PSScriptAnalyzer -Scope CurrentUser
+```
+
+Purpose:
+Static analysis and code quality validation.
+
 ## Repository Separation
 
 1. The exporter project repository shall never contain exported database artifacts.
@@ -666,6 +680,7 @@ BannerProd
     ├── dependencies.dot
     ├── dependencies.svg
     └── dependencies.html
+    
+```
 
 ---
-
