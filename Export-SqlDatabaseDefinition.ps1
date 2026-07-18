@@ -164,7 +164,7 @@ dependencies:
 referenceData:
 
   enabled: false
-    # Add validation that tables is acutally a collection of table names, and that each table name is a string.
+  # Add validation that tables is acutally a collection of table names, and that each table name is a string.
   tables: []
 '@
 }
@@ -440,51 +440,130 @@ function Test-ExportDependencies {
     [CmdletBinding()]
     param()
 
+    $dependencies = @(
+        [PSCustomObject]@{
+            Name = 'PowerShell'
+            Required = $true
+            InstallCommand = 'Upgrade PowerShell to version 7.6 or later'
+            Notes = 'Validate PowerShell version 7.6+'
+            Validation = 'PSVersionTable.PSVersion'
+        },
+        [PSCustomObject]@{
+            Name = 'powershell-yaml'
+            Required = $true
+            InstallCommand = 'Install-Module powershell-yaml -Scope CurrentUser'
+            Notes = 'ConvertFrom-Yaml available'
+            Validation = 'ConvertFrom-Yaml'
+        },
+        [PSCustomObject]@{
+            Name = 'SqlServer'
+            Required = $false
+            InstallCommand = 'Install-Module SqlServer -Scope CurrentUser'
+            Notes = 'Get-Module SqlServer -ListAvailable'
+            Validation = 'SqlServer module'
+        },
+        [PSCustomObject]@{
+            Name = 'Graphviz'
+            Required = $false
+            InstallCommand = 'winget install Graphviz.Graphviz'
+            Notes = 'Get-Command dot -ErrorAction SilentlyContinue'
+            Validation = 'dot.exe'
+        }
+    )
+
     $installedDependencies = [System.Collections.Generic.List[string]]::new()
     $missingDependencies = [System.Collections.Generic.List[string]]::new()
-    $minimumPowerShellVersion = [Version]'7.4'
+    $installCommands = [System.Collections.Generic.List[string]]::new()
+    $dependencyDetails = [System.Collections.Generic.List[object]]::new()
 
     Write-Log -Level Information -Message 'Dependency Check Started'
 
-    $currentPowerShellVersion = $PSVersionTable.PSVersion
-    if ($currentPowerShellVersion -ge $minimumPowerShellVersion) {
-        $installedDependencies.Add(("PowerShell {0}" -f $currentPowerShellVersion.ToString()))
-        Write-Log -Level Information -Message ("PASS: PowerShell {0}" -f $currentPowerShellVersion.ToString())
-    }
-    else {
-        $missingDependencies.Add(("PowerShell 7.4+ (current: {0})" -f $currentPowerShellVersion.ToString()))
-        Write-Log -Level Error -Message ("FAIL: PowerShell {0} is below required 7.4+" -f $currentPowerShellVersion.ToString())
-    }
+    foreach ($dependency in $dependencies) {
+        $isInstalled = $false
+        $detail = [PSCustomObject]@{
+            Name = $dependency.Name
+            Required = $dependency.Required
+            InstallCommand = $dependency.InstallCommand
+            Notes = $dependency.Notes
+            Validation = $dependency.Validation
+            Installed = $false
+            Message = ''
+        }
 
-    $yamlCommand = Get-Command -Name 'ConvertFrom-Yaml' -ErrorAction SilentlyContinue
-    if ($null -eq $yamlCommand) {
-        Import-Module powershell-yaml -ErrorAction SilentlyContinue
-        $yamlCommand = Get-Command -Name 'ConvertFrom-Yaml' -ErrorAction SilentlyContinue
-    }
+        switch ($dependency.Name) {
+            'PowerShell' {
+                $minimumPowerShellVersion = [Version]'7.6'
+                $currentPowerShellVersion = $PSVersionTable.PSVersion
+                $isInstalled = $currentPowerShellVersion -ge $minimumPowerShellVersion
+                if ($isInstalled) {
+                    $detail.Installed = $true
+                    $detail.Message = ("PASS: {0}" -f $dependency.Name)
+                    $installedDependencies.Add(("PowerShell {0}" -f $currentPowerShellVersion.ToString()))
+                    Write-Log -Level Information -Message ("PASS: {0}" -f $dependency.Name)
+                }
+                else {
+                    $detail.Message = ("ERROR: {0} not installed. {1}" -f $dependency.Name, $dependency.InstallCommand)
+                    $missingDependencies.Add(("{0} ({1})" -f $dependency.Name, $dependency.InstallCommand))
+                    $installCommands.Add($dependency.InstallCommand)
+                    Write-Log -Level Error -Message ("ERROR: {0} not installed. {1}" -f $dependency.Name, $dependency.InstallCommand)
+                }
+            }
+            'powershell-yaml' {
+                $yamlCommand = Get-Command -Name 'ConvertFrom-Yaml' -ErrorAction SilentlyContinue
+                if ($null -eq $yamlCommand) {
+                    Import-Module powershell-yaml -ErrorAction SilentlyContinue
+                    $yamlCommand = Get-Command -Name 'ConvertFrom-Yaml' -ErrorAction SilentlyContinue
+                }
 
-    if ($null -ne $yamlCommand) {
-        $installedDependencies.Add('ConvertFrom-Yaml')
-        Write-Log -Level Information -Message 'PASS: ConvertFrom-Yaml'
-    }
-    else {
-        $missingDependencies.Add('ConvertFrom-Yaml (Install-Module powershell-yaml -Scope CurrentUser)')
-        Write-Log -Level Warning -Message 'FAIL: ConvertFrom-Yaml not available. Install-Module powershell-yaml -Scope CurrentUser'
-    }
+                if ($null -ne $yamlCommand) {
+                    $isInstalled = $true
+                    $detail.Installed = $true
+                    $detail.Message = 'PASS: powershell-yaml'
+                    $installedDependencies.Add('ConvertFrom-Yaml')
+                    Write-Log -Level Information -Message 'PASS: powershell-yaml'
+                }
+                else {
+                    $detail.Message = ("ERROR: powershell-yaml not installed. {0}" -f $dependency.InstallCommand)
+                    $missingDependencies.Add(("{0} ({1})" -f $dependency.Name, $dependency.InstallCommand))
+                    $installCommands.Add($dependency.InstallCommand)
+                    Write-Log -Level Error -Message ("ERROR: powershell-yaml not installed. {0}" -f $dependency.InstallCommand)
+                }
+            }
+            'SqlServer' {
+                $sqlServerModule = Get-Module -ListAvailable -Name 'SqlServer' | Select-Object -First 1
+                if ($null -ne $sqlServerModule) {
+                    $isInstalled = $true
+                    $detail.Installed = $true
+                    $detail.Message = 'PASS: SqlServer'
+                    $installedDependencies.Add('SqlServer')
+                    Write-Log -Level Information -Message 'PASS: SqlServer'
+                }
+                else {
+                    $detail.Message = 'INFO: SqlServer not installed (optional)'
+                    Write-Log -Level Information -Message 'INFO: SqlServer not installed (optional)'
+                }
+            }
+            'Graphviz' {
+                $graphvizCommand = Get-Command -Name 'dot' -ErrorAction SilentlyContinue
+                if ($null -ne $graphvizCommand) {
+                    $isInstalled = $true
+                    $detail.Installed = $true
+                    $detail.Message = 'PASS: Graphviz'
+                    $installedDependencies.Add('Graphviz')
+                    Write-Log -Level Information -Message 'PASS: Graphviz'
+                }
+                else {
+                    $detail.Message = 'INFO: Graphviz not installed (optional)'
+                    Write-Log -Level Information -Message 'INFO: Graphviz not installed (optional)'
+                }
+            }
+        }
 
-    $sqlServerModule = Get-Module -ListAvailable -Name 'SqlServer' | Select-Object -First 1
-    if ($null -ne $sqlServerModule) {
-        $installedDependencies.Add('SqlServer')
-    }
-    else {
-        Write-Log -Level Information -Message 'INFO: SqlServer module not installed (optional)'
-    }
+        if ($dependency.Required -and -not $isInstalled) {
+            $missingDependencies.Add(("{0}" -f $dependency.Name))
+        }
 
-    $graphvizCommand = Get-Command -Name 'dot' -ErrorAction SilentlyContinue
-    if ($null -ne $graphvizCommand) {
-        $installedDependencies.Add('dot.exe')
-    }
-    else {
-        Write-Log -Level Information -Message 'INFO: Graphviz not installed (optional)'
+        $dependencyDetails.Add($detail)
     }
 
     Write-Log -Level Information -Message 'Dependency Check Complete'
@@ -493,6 +572,8 @@ function Test-ExportDependencies {
         IsValid = ($missingDependencies.Count -eq 0)
         InstalledDependencies = @($installedDependencies)
         MissingDependencies = @($missingDependencies)
+        InstallCommands = @($installCommands)
+        DependencyDetails = @($dependencyDetails)
     }
 }
 #endregion

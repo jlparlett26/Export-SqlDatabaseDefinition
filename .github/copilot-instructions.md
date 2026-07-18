@@ -56,3 +56,14 @@ If a requested change appears to improve the architecture:
 - Explain benefits and drawbacks.
 - Recommend whether ProjectPlan.md should be updated.
 - Do not automatically modify architectural assumptions without confirmation.
+
+## Dependency Management
+
+New runtime dependencies must:
+
+- Be documented in ProjectPlan.md
+- Be added to Test-ExportDependencies
+- Include installation guidance
+- Be classified as Required or Optional
+
+The exporter must never auto-install dependencies.

@@ -69,6 +69,7 @@ Next Features:
 ⏳ export.log
 
 Future functionality is intentionally out of scope until this feature is completed.
+
 ---
 
 # Core Goals
@@ -99,16 +100,26 @@ Changes to the schema must:
 
 # Runtime Dependency Validation
 
-The exporter shall validate required runtime dependencies before processing.
+The exporter validates runtime dependencies before beginning work.
 
-Examples:
+Required Dependencies
 
-- PowerShell version
-- powershell-yaml module
-- SqlServer module
-- Graphviz (future)
+- PowerShell 7.6+
+- powershell-yaml
 
-Missing dependencies should be reported with clear installation instructions.
+Optional Dependencies
+
+- SqlServer
+- Graphviz
+
+Dependency validation should provide:
+
+- Dependency name
+- Required or optional status
+- Installation command
+- Validation status
+
+The exporter must never automatically install dependencies.
 
 The exporter should fail fast before beginning export processing.
 
@@ -577,6 +588,10 @@ Controlled entirely through YAML.
 - Dependency filtering
 - Large graph handling
 - Git integration
+- Detect dot-sourcing and avoid automatic execution.
+- Allow developers to load functions without running the exporter.
+- Generate dependency report from Test-ExportDependencies
+- Export dependency status to exportinfo.json
 
 ---
 
