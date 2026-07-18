@@ -22,6 +22,54 @@ This is **not** intended to be a clone of the SSMS Generate Scripts wizard.
 This is a **Database-to-Folder Exporter with Dependency Documentation**.
 
 ---
+# Coding Standards
+
+All PowerShell code should:
+
+- Target PowerShell 7.6+
+- Use Set-StrictMode
+- Use CmdletBinding
+- Use comment-based help
+- Use Verb-Noun naming
+- Use UTF-8 encoding
+- Prefer deterministic output
+- Avoid hard-coded paths
+- Avoid writing exported artifacts into the project repository
+- Separate configuration generation from configuration usage
+
+---
+
+# Current Development State
+
+Current Sprint:
+Sprint 1 - Foundation
+
+Current Feature:
+Get-DefaultExportProfileContent
+
+Completed:
+
+✅ Project Skeleton
+✅ Logging Framework
+✅ YAML Schema
+✅ Get-DefaultExportProfileContent
+✅ Initialize-ExportProfile
+✅ Read-ExportProfil
+
+
+In Progress:
+
+🔄 Test-ExportDependencies
+🔄 Get-DefaultExportProfileContent
+
+Next Features:
+
+⏳ Test-ExportProfile
+⏳ exportinfo.json
+⏳ export.log
+
+Future functionality is intentionally out of scope until this feature is completed.
+---
 
 # Core Goals
 
@@ -38,6 +86,31 @@ The tool shall:
 ---
 
 # Architectural Rules
+
+## Configuration Management
+
+The export.yaml schema is a versioned contract.
+
+Changes to the schema must:
+
+1. Be documented in ProjectPlan.md
+2. Increment configVersion when appropriate
+3. Remain backward compatible whenever practical
+
+# Runtime Dependency Validation
+
+The exporter shall validate required runtime dependencies before processing.
+
+Examples:
+
+- PowerShell version
+- powershell-yaml module
+- SqlServer module
+- Graphviz (future)
+
+Missing dependencies should be reported with clear installation instructions.
+
+The exporter should fail fast before beginning export processing.
 
 ## Repository Separation
 
@@ -60,6 +133,18 @@ Database Export:
 ```text
 D:\DatabaseExports\BannerProd
 ```
+
+## Export Folder Ownership
+
+The export folder is considered application data.
+
+The exporter owns:
+
+- export.yaml
+- exportinfo.json
+- export.log
+
+The exporter must never modify files outside the export folder unless explicitly requested.
 
 ---
 
@@ -148,6 +233,62 @@ If `export.yaml` does not exist:
 
 The user reviews the configuration and reruns the exporter.
 
+## Configuration Schema Version 
+
+configVersion: 1
+
+# SQL Database Exporter Configuration
+
+connection:
+
+  # SQL Server instance name
+  server: CHANGE_ME
+
+  # Database name
+  database: CHANGE_ME
+
+  # Windows | SQL
+  authentication: Windows
+
+export:
+
+  schemas: true
+  tables: true
+  views: true
+  storedProcedures: true
+  functions: true
+  triggers: true
+  synonyms: true
+  sequences: true
+
+security:
+
+  # Export security information
+  enabled: true
+
+  roles: true
+  users: true
+  permissions: true
+
+dependencies:
+
+  # Export dependency information from
+  # sys.sql_expression_dependencies
+  enabled: true
+
+  csv: true
+  json: true
+  dot: true
+  svg: true
+  html: true
+
+referenceData:
+
+  enabled: false
+
+  # Tables whose data should be exported
+  tables: []
+
 ---
 
 ## Dependency Settings
@@ -174,7 +315,6 @@ Store:
 - Server
 - Database
 - Tool version
-- Profile name
 - Export timestamp
 
 ## export.log
@@ -381,34 +521,18 @@ Controlled entirely through YAML.
 
 ---
 
-# Profiles
-
-Potential future profiles:
-
-- Standard
-- SchemaOnly
-- SecurityAudit
-- DependencyMapOnly
-- ReferenceDataOnly
-- MigrationReview
-
-Default:
-
-```yaml
-profile: Standard
-```
-
----
-
 # Development Roadmap
 
 ## Sprint 1 - Foundation
 
-- Project skeleton
-- Create export.yaml
-- Load YAML
-- Create exportinfo.json
-- Create export.log
+✅ Project skeleton
+✅ Logging
+✅ Export profile schema
+✅ Initialize-ExportProfile
+🔄 Get-DefaultExportProfileContent
+⏳ Read-ExportProfile
+⏳ exportinfo.json
+⏳ export.log
 
 ## Sprint 2 - Core Export
 
@@ -516,4 +640,6 @@ BannerProd
     ├── dependencies.dot
     ├── dependencies.svg
     └── dependencies.html
-```
+
+---
+
