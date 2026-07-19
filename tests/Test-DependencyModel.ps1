@@ -458,6 +458,76 @@ Invoke-TestStep -Name 'Export-DependenciesDot' -ScriptBlock {
     }
 }
 
+Invoke-TestStep -Name 'Export-DependenciesSvg' -ScriptBlock {
+    if (-not $script:DependenciesLoaded) {
+        Skip-TestStep -Message 'Get-DatabaseDependencies did not complete successfully.'
+    }
+
+    if (-not (Get-Command -Name Export-DependenciesSvg -ErrorAction SilentlyContinue)) {
+        Skip-TestStep -Message 'Export-DependenciesSvg function was not found.'
+    }
+
+    $dotCommand = Get-Command -Name 'dot' -ErrorAction SilentlyContinue
+    if ($null -eq $dotCommand) {
+        Write-TestStatus -Status WARN -Message 'Graphviz is not installed. Skipping SVG generation test.'
+        Skip-TestStep -Message 'Graphviz is not installed. Skipping SVG generation test.'
+    }
+
+    $svgExportResult = $null
+    try {
+        $svgExportResult = Export-DependenciesSvg `
+            -OutputFolder $script:ResolvedOutputFolder
+    }
+    catch {
+        $errorMessage = [string]$_.Exception.Message
+        if ($errorMessage -match 'Graphviz dot command was not found|winget install Graphviz\.Graphviz|\bdot\b') {
+            Write-TestStatus -Status WARN -Message 'Graphviz is not installed. Skipping SVG generation test.'
+            Skip-TestStep -Message 'Graphviz is not installed. Skipping SVG generation test.'
+        }
+
+        throw
+    }
+
+    Assert-Condition `
+        -Condition ($null -ne $svgExportResult) `
+        -Message 'Export-DependenciesSvg returned null.'
+
+    foreach ($propertyName in @('DotPath', 'SvgPath', 'Generated')) {
+        Assert-Condition `
+            -Condition ($null -ne $svgExportResult.PSObject.Properties[$propertyName]) `
+            -Message ("Export-DependenciesSvg result is missing {0}." -f $propertyName)
+    }
+
+    $dotPath = [string]$svgExportResult.DotPath
+    $svgPath = [string]$svgExportResult.SvgPath
+
+    Assert-Condition `
+        -Condition (-not [string]::IsNullOrWhiteSpace($dotPath)) `
+        -Message 'Export-DependenciesSvg returned an empty DotPath.'
+
+    Assert-Condition `
+        -Condition (-not [string]::IsNullOrWhiteSpace($svgPath)) `
+        -Message 'Export-DependenciesSvg returned an empty SvgPath.'
+
+    Assert-Condition `
+        -Condition (Test-Path -LiteralPath $dotPath -PathType Leaf) `
+        -Message "DOT file does not exist: $dotPath"
+
+    Assert-Condition `
+        -Condition (Test-Path -LiteralPath $svgPath -PathType Leaf) `
+        -Message "SVG file does not exist: $svgPath"
+
+    $svgRawContent = Get-Content -LiteralPath $svgPath -Raw
+
+    Assert-Condition `
+        -Condition (-not [string]::IsNullOrWhiteSpace($svgRawContent)) `
+        -Message "SVG file is empty: $svgPath"
+
+    Assert-Condition `
+        -Condition ($svgRawContent -match '<svg') `
+        -Message 'SVG file does not contain <svg.'
+}
+
 Invoke-TestStep -Name 'Dependency Object Shape' -ScriptBlock {
     if (-not $script:DependenciesLoaded) {
         Skip-TestStep -Message 'Get-DatabaseDependencies did not complete successfully.'

@@ -3528,6 +3528,115 @@ function Export-DependenciesDot {
     }
 }
 
+function Export-DependenciesSvg {
+    <#
+    .SYNOPSIS
+        Exports dependency graph SVG to Dependencies\dependencies.svg.
+
+    .DESCRIPTION
+        Generates an SVG file from an existing DOT dependency graph using the Graphviz
+        dot command-line tool.
+
+    .PARAMETER OutputFolder
+        Target export folder that contains the Dependencies subfolder.
+
+    .PARAMETER DotPath
+        Optional full path to the DOT file. If omitted, uses
+        <OutputFolder>\Dependencies\dependencies.dot.
+
+    .OUTPUTS
+        System.Management.Automation.PSCustomObject
+    #>
+    [CmdletBinding()]
+    [OutputType([System.Management.Automation.PSCustomObject])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$OutputFolder,
+
+        [Parameter(Mandatory = $false)]
+        [string]$DotPath
+    )
+
+    try {
+        if ([string]::IsNullOrWhiteSpace($OutputFolder)) {
+            throw [System.InvalidOperationException]::new('OutputFolder cannot be null, empty, or whitespace.')
+        }
+
+        $resolvedOutputFolder = [System.IO.Path]::GetFullPath($OutputFolder.Trim())
+        if (-not (Test-Path -LiteralPath $resolvedOutputFolder -PathType Container)) {
+            throw [System.InvalidOperationException]::new(("OutputFolder does not exist: {0}" -f $resolvedOutputFolder))
+        }
+
+        Write-ExporterLog -Level Information -Message 'Starting dependencies SVG export'
+
+        $dependenciesFolder = [System.IO.Path]::Combine($resolvedOutputFolder, 'Dependencies')
+        if (-not (Test-Path -LiteralPath $dependenciesFolder -PathType Container)) {
+            throw [System.InvalidOperationException]::new(("Dependencies folder does not exist: {0}" -f $dependenciesFolder))
+        }
+
+        $resolvedDotPath = $null
+        if ([string]::IsNullOrWhiteSpace($DotPath)) {
+            $resolvedDotPath = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($dependenciesFolder, 'dependencies.dot'))
+        }
+        else {
+            $resolvedDotPath = [System.IO.Path]::GetFullPath($DotPath.Trim())
+        }
+
+        $svgPath = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($dependenciesFolder, 'dependencies.svg'))
+
+        Write-ExporterLog -Level Information -Message ("DOT path: {0}" -f $resolvedDotPath)
+        Write-ExporterLog -Level Information -Message ("SVG path: {0}" -f $svgPath)
+
+        if (-not (Test-Path -LiteralPath $resolvedDotPath -PathType Leaf)) {
+            throw [System.InvalidOperationException]::new(("DOT file does not exist: {0}" -f $resolvedDotPath))
+        }
+
+        $dotContent = Get-Content -LiteralPath $resolvedDotPath -Raw
+        if ([string]::IsNullOrWhiteSpace($dotContent)) {
+            throw [System.InvalidOperationException]::new(("DOT file is empty: {0}" -f $resolvedDotPath))
+        }
+
+        $dotCommand = Get-Command -Name 'dot' -ErrorAction SilentlyContinue
+        if ($null -eq $dotCommand) {
+            $message = @(
+                'Graphviz dot command was not found.',
+                'Install Graphviz and retry:',
+                'winget install Graphviz.Graphviz'
+            ) -join [Environment]::NewLine
+
+            throw [System.InvalidOperationException]::new($message)
+        }
+
+        Write-ExporterLog -Level Information -Message ("Graphviz command found: {0}" -f $dotCommand.Source)
+
+        & $dotCommand.Source '-Tsvg' $resolvedDotPath '-o' $svgPath
+        $dotExitCode = $LASTEXITCODE
+
+        if ($dotExitCode -ne 0) {
+            throw [System.InvalidOperationException]::new((
+                'Graphviz SVG generation failed with exit code {0}.' + [Environment]::NewLine +
+                'DOT path: {1}' + [Environment]::NewLine +
+                'SVG path: {2}'
+            ) -f $dotExitCode, $resolvedDotPath, $svgPath)
+        }
+
+        if (-not (Test-Path -LiteralPath $svgPath -PathType Leaf)) {
+            throw [System.InvalidOperationException]::new(("SVG file was not created: {0}" -f $svgPath))
+        }
+
+        Write-ExporterLog -Level Information -Message 'Dependencies SVG export completed'
+
+        return [PSCustomObject]@{
+            DotPath = $resolvedDotPath
+            SvgPath = $svgPath
+            Generated = $true
+        }
+    }
+    catch {
+        throw [System.InvalidOperationException]::new(("Failed to export dependencies SVG. {0}" -f $_.Exception.Message))
+    }
+}
+
 function Export-DependencyWarnings {
     <#
     .SYNOPSIS

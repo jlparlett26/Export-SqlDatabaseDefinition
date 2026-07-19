@@ -82,8 +82,7 @@ Dependency Visualization Framework
 
 
 Current Feature:
-Documentation cleanup and roadmap alignment
-Export-DependenciesDot
+Export-DependenciesSvg
 
 Completed Milestones:
 
@@ -104,6 +103,9 @@ Current Status:
 ✅ Test-DependencyModel PASS
 ✅ Shared TestFramework.ps1
 ✅ Project Plan updated and reorganized
+✅ Documentation cleanup and roadmap alignment
+✅ Export-DependenciesDot
+✅ 
 
 ## Architectural Rules
 
@@ -714,16 +716,13 @@ Sprint 3 review complete.
 Completed:
 
 - Export-DependenciesDot
+- Export-DependenciesSvg
 
 Validated By:
 
 - Test-DependencyModel
 
 In Progress:
-
-- Export-DependenciesSvg
-
-Planned:
 
 - Export-DependenciesHtml
 
