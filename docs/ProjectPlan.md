@@ -21,8 +21,7 @@ This is **not** intended to be a clone of the SSMS Generate Scripts wizard.
 
 This is a **Database-to-Folder Exporter with Dependency Documentation**.
 
----
-# Coding Standards
+## Coding Standards
 
 All PowerShell code should:
 
@@ -37,100 +36,73 @@ All PowerShell code should:
 - Avoid writing exported artifacts into the project repository
 - Separate configuration generation from configuration usage
 
----
+## Development Process 
 
+### Development Dependencies
 
+PSScriptAnalyzer
 
----
+Install:
 
-# Current Development State
+```powershell
+Install-Module PSScriptAnalyzer -Scope CurrentUser
+```
+
+Purpose:
+
+Static analysis and code quality validation.
+
+### Quality Gates
+
+Before closing a sprint:
+
+- Regression tests must pass.
+- New warnings must be reviewed.
+- High-confidence warnings should be corrected.
+- Any intentionally deferred warnings should be documented.
+
+- Invoke-ScriptAnalyzer must be executed.
+
+### Accepted PSScriptAnalyzer Exceptions
+
+PSScriptAnalyzer exceptions are accepted by design:
+
+- PSUseSingularNouns
+- Export-* functions intentionally use plural nouns because they export collections of objects rather than a single object.
+
+## Current Development State
 
 Current Sprint:
-Sprint 3 - Dependency Data
+
+Sprint 4 - Dependency Visualization
 
 Current Milestone:
-Dependency Reporting Framework
+
+Dependency Visualization Framework
 
 Current Feature:
-Sprint 3 Review
 
-Completed During Sprint 3:
-✅ Get-DatabaseDependencies
-✅ ReferencingFullName
-✅ ReferencedFullName
-✅ Export-DependenciesCsvCurrent Sprint:
-Sprint 3 - Dependency Data
+Generate dependencies.dot
 
-Current Milestone:
-Dependency Reporting Framework
+Completed Milestones:
 
-Current Feature:
-Sprint 3 Review
-
-Completed During Sprint 3:
-✅ Get-DatabaseDependencies
-✅ ReferencingFullName
-✅ ReferencedFullName
-✅ Export-DependenciesCsv
-✅ Export-DependenciesJson
-✅ Export-DependencyWarnings
-✅ Test-DependencyModel
+- Foundation
+- Core Object Export
+- Dependency Data Export
 
 Regression Status:
-✅ Test-FoundationRegression
-✅ Test-DependencyModel
+
+- Test-FoundationRegression PASS
+- Test-DependencyModel PASS
 
 Current Status:
-Sprint 3 development complete.
-Sprint 3 review pending.
-✅ Export-DependenciesJson
-✅ Export-DependencyWarnings
-✅ Test-DependencyModel
 
-Regression Status:
-✅ Test-FoundationRegression
-✅ Test-DependencyModel
+- Sprint 3 complete
+- Sprint 4 ready to begin
 
-Current Status:
-Sprint 3 development complete.
-Sprint 3 review pending.
+## Architectural Rules
 
-## Sprint 3 Deliverables
-
-Generated Outputs:
-
-Dependencies\
-    dependencies.csv
-    dependencies.json
-    dependency-warnings.md
-
-Validated By:
-    tests\Test-DependencyModel.ps1
-
-All outputs are generated from the canonical dependency model.
-
-
-Future functionality is intentionally out of scope until this feature is completed.
-
----
-
-# Core Goals
-
-The tool shall:
-
-- Export SQL Server objects into a deterministic folder structure
-- Use a YAML configuration file
-- Produce Git-friendly output
-- Export security information
-- Generate dependency documentation
-- Create a visual dependency map from `sys.sql_expression_dependencies`
-- Support repeatable exports for long-term change tracking
-
----
-
-# Architectural Rules
-
-## Configuration Management
+### Configuration Management
 
 The export.yaml schema is a versioned contract.
 
@@ -140,7 +112,7 @@ Changes to the schema must:
 2. Increment configVersion when appropriate
 3. Remain backward compatible whenever practical
 
-# Runtime Dependency Validation
+### Runtime Dependency Validation
 
 The exporter validates runtime dependencies before beginning work.
 
@@ -177,108 +149,7 @@ SqlServer
 Graphviz
     winget install Graphviz.Graphviz
 
-# Future Enhancements
-
-## Test Framework Consolidation
-
-Create:
-
-    tests\TestFramework.ps1
-
-Purpose:
-- Shared Write-TestStatus
-- Shared Assert-Condition
-- Shared Invoke-TestStep
-
-Consumers:
-- Test-FoundationRegression.ps1
-- Test-DependencyModel.ps1    
-
-## Development Dependencies
-
-PSScriptAnalyzer
-
-Install:
-
-```powershell
-Install-Module PSScriptAnalyzer -Scope CurrentUser
-```
-
-Purpose:
-Static analysis and code quality validation.
-
-## Quality Gates
-
-Before closing a sprint:
-
-- Regression tests must pass.
-- New warnings must be reviewed.
-- High-confidence warnings should be corrected.
-- Any intentionally deferred warnings should be documented. 
-
-- Invoke-ScriptAnalyzer must be executed.
-    PSScriptAnalyzer Exceptions
-        PSUseSingularNouns
-        Export-* functions intentionally use plural nouns because they export collections of objects rather than a single object.
-        This warning is accepted by design.
-
-PSScriptAnalyzer Exceptions
-Known Accepted Warnings
-``
-PSUseSingularNouns
-
-Accepted by design.
-
-Export-* functions intentionally use plural nouns because they
-export collections of database objects rather than a single object.
-
-Examples:
-
-- Export-Tables
-- Export-Views
-- Export-Functions
-- Export-Triggers
-
-This warning will not be remediated.
-``
-
-## Repository Separation
-
-1. The exporter project repository shall never contain exported database artifacts.
-
-2. All export output must be written outside the project folder.
-
-3. `export.yaml` shall reside in the export folder.
-
-### Example
-
-Exporter Code:
-
-```text
-C:\Work\Code\Export-SqlDatabaseDefinition
-```
-
-Database Export:
-
-```text
-D:\DatabaseExports\SomeDatabaseName
-```
-
-## Export Folder Ownership
-
-The export folder is considered application data.
-
-The exporter owns:
-
-- export.yaml
-- exportinfo.json
-- export.log
-
-The exporter must never modify files outside the export folder unless explicitly requested.
-
----
-
-## Deterministic Output
+### Deterministic Output
 
 The exporter shall generate deterministic output.
 
@@ -303,9 +174,27 @@ git diff
 
 should show only meaningful changes.
 
----
+### Repository Separation
 
-## Object Organization
+1. The exporter project repository shall never contain exported database artifacts.
+
+2. All export output must be written outside the project folder.
+
+3. `export.yaml` shall reside in the export folder.
+
+### Export Folder Ownership
+
+The export folder is considered application data.
+
+The exporter owns:
+
+- export.yaml
+- exportinfo.json
+- export.log
+
+The exporter must never modify files outside the export folder unless explicitly requested.
+
+### Object Organization
 
 - One object per file
 - Predictable folder structure
@@ -324,9 +213,7 @@ StoredProcedures\
     dbo.usp_LoadSecurity.sql
 ```
 
----
-
-# Standard Export Structure
+## Standard Export Structure
 
 ```text
 DatabaseName
@@ -349,11 +236,9 @@ DatabaseName
 └── Dependencies
 ```
 
----
+## Configuration
 
-# YAML Configuration
-
-## Automatic Configuration Creation
+### Automatic Configuration Creation
 
 If `export.yaml` does not exist:
 
@@ -363,12 +248,16 @@ If `export.yaml` does not exist:
 
 The user reviews the configuration and reruns the exporter.
 
-## Configuration Schema Version 
+### Configuration Schema Version
 
+`configVersion: 1`
+
+### SQL Database Exporter Configuration
+
+```yaml
 configVersion: 1
 
-# SQL Database Exporter Configuration
-
+# SQL Server connection settings
 connection:
 
   # SQL Server instance name
@@ -418,10 +307,9 @@ referenceData:
 
   # Tables whose data should be exported
   tables: []
+```
 
----
-
-## Dependency Settings
+### Dependency Settings
 
 The YAML configuration should control:
 
@@ -434,11 +322,9 @@ The YAML configuration should control:
 - SVG output
 - HTML output
 
----
+## Logging and Metadata
 
-# Metadata and Logging
-
-## exportinfo.json
+### exportinfo.json
 
 Store:
 
@@ -447,7 +333,7 @@ Store:
 - Tool version
 - Export timestamp
 
-## export.log
+### export.log
 
 Log:
 
@@ -458,9 +344,9 @@ Log:
 - Errors
 - Completion status
 
----
+## Core Export Features
 
-# Core Object Export
+### Database and Object Export
 
 The exporter will support:
 
@@ -474,9 +360,7 @@ The exporter will support:
 - Synonyms
 - Sequences
 
----
-
-# Security Export
+### Security Export
 
 Export:
 
@@ -496,11 +380,22 @@ Primary use case:
 - Migration review
 - Security auditing
 
----
+### Reference Data Export
 
-# Dependency Analysis
+Reference data export is optional.
 
-## Source
+Examples:
+
+- StateCodes
+- Campuses
+- Security roles
+- Lookup tables
+
+Controlled entirely through YAML.
+
+## Dependency Analysis
+
+### Source
 
 Dependencies will be collected from:
 
@@ -521,9 +416,107 @@ Capture:
 - Caller-dependent flag
 - Ambiguous flag
 
----
+### Canonical Dependency Model
 
-## Structured Outputs
+All dependency exports shall be generated from a single in-memory dependency model.
+
+Minimum fields:
+
+- ReferencingDatabase
+- ReferencingSchema
+- ReferencingObject
+- ReferencingFullName
+- ReferencingObjectType
+
+- ReferencedServer
+- ReferencedDatabase
+- ReferencedSchema
+- ReferencedObject
+- ReferencedFullName
+- ReferencedObjectType
+
+- IsSchemaBound
+- IsCallerDependent
+- IsAmbiguous
+- IsCrossDatabase
+- IsCrossServer
+- IsExternalReference
+
+- ReferencingId
+- ReferencedId
+- ReferencingClass
+- ReferencedClass
+
+Dependency outputs:
+
+Completed:
+
+- dependencies.csv
+- dependencies.json
+- dependency-warnings.md
+
+Future visualization outputs:
+
+- dependencies.dot
+- dependencies.svg
+- dependencies.html
+
+Purpose:
+
+- Migration review
+- Operational risk review
+- Dependency validation
+- Pre-upgrade assessment
+
+must be generated from this model.
+
+### Cross-Database References
+
+Cross-database references shall be recorded.
+
+Version 1 shall not attempt to connect to or resolve external databases.
+
+Example:
+
+    ViewA -> OtherDatabase.dbo.TableB
+
+is recorded but not resolved.
+
+### Cross-Server References
+
+Cross-server references shall be recorded.
+
+Version 1 shall not attempt to connect to linked servers.
+
+Example:
+
+    ViewA -> LinkedServer.Database.Schema.Table
+
+is recorded but not resolved.
+
+### Dependency Object Types
+
+Version 1 shall standardize object types as:
+
+- TABLE
+- VIEW
+- PROCEDURE
+- FUNCTION
+- TRIGGER
+- SYNONYM
+- SEQUENCE
+- UNKNOWN
+
+### Dependency Warning Rules
+
+dependency-warnings.md shall report:
+
+- Cross Database References
+- Cross Server References
+- Ambiguous References
+- Caller Dependent References
+
+### Structured Outputs
 
 ```text
 Dependencies\
@@ -547,16 +540,44 @@ Purpose:
 - Comparisons
 - Reporting
 
----
-# Dependency Analysis Enhancements
+```text
+Dependencies\
+    dependency-warnings.md
+```
+
+Purpose:
+
+- Migration review
+- Operational risk review
+- Dependency validation
+- Pre-upgrade assessment
+
+### Dependency Analysis Enhancements
 
 - Preserve synonym base-object metadata in exported files.
 - Use synonym metadata when identifying cross-database and cross-server dependencies.
 - Use synonym metadata during migration analysis and dependency reporting.
 
-# Dependency Visualization
+### Synonym Integration
 
-## DOT Output
+Exported synonym metadata may be used to improve:
+
+- Dependency reporting
+- Migration analysis
+- Cross-database reference identification
+- Cross-server reference identification
+
+Version 1 dependency extraction remains based on:
+
+```text
+sys.sql_expression_dependencies
+```
+
+Synonym metadata is supplemental information.
+
+## Dependency Visualization
+
+### DOT Output
 
 ```text
 Dependencies\
@@ -565,7 +586,7 @@ Dependencies\
 
 DOT is the canonical visualization source.
 
-## SVG Output
+### SVG Output
 
 ```text
 Dependencies\
@@ -578,7 +599,7 @@ Benefits:
 - Git-friendly
 - Scalable
 
-## HTML Report
+### HTML Report
 
 ```text
 Dependencies\
@@ -594,11 +615,7 @@ Include:
 - Caller-dependent references
 - Orphaned objects
 
----
-
-# Dependency Visualization Rules
-
-## Initial Version
+### Dependency Visualization Rules
 
 Keep visualization simple.
 
@@ -610,7 +627,7 @@ dbo.vStudentSummary -> dbo.Student
 dbo.usp_LoadSecurity -> dbo.SecurityRole
 ```
 
-### Future Enhancement
+Future Enhancement:
 
 Color coding:
 
@@ -620,261 +637,98 @@ Color coding:
 - Functions = Purple
 - External References = Red
 
----
+## Development Roadmap
 
-## Dependency Warnings
-
-Generate:
-
-```text
-Dependencies\
-    dependency-warnings.md
-```
-
-Include:
-
-- Ambiguous references
-- Caller-dependent references
-- Cross-database references
-- Cross-server references
-- Unresolved objects
-
----
-
-# Reference Data
-
-Reference data export is optional.
-
-Examples:
-
-- StateCodes
-- Campuses
-- Security roles
-- Lookup tables
-
-Controlled entirely through YAML.
-
----
-
-# Development Roadmap
-
-# Sprint 3 Dependency Analysis Design Decisions
-
-## Canonical Dependency Source
-
-Version 1 shall use:
-
-    sys.sql_expression_dependencies
-
-as the authoritative dependency source.
-
-Known limitations:
-
-- Dynamic SQL may not be detected.
-- Some synonym scenarios may not fully resolve.
-- SQL Server dependency metadata is accepted as authoritative for Version 1.
-
-## Canonical Dependency Object Model
-
-All dependency exports shall be generated from a single in-memory dependency model.
-
-Minimum fields:
-
-- ReferencingFullName
-- ReferencedFullName
-- ReferencingType
-
-- ReferencedServer
-- ReferencedDatabase
-- ReferencedSchema
-- ReferencedObject
-
-- IsSchemaBound
-- IsCallerDependent
-- IsAmbiguous
-
-Future dependency outputs:
-
-- dependencies.csv
-- dependencies.json
-- Dependencies\dependency-warnings.md
-    Purpose:
-    - Migration review
-    - Operational risk review
-    - Dependency validation
-    - Pre-upgrade assessment
-
-- dependencies.dot
-- dependencies.svg
-- dependencies.html
-
-must be generated from this model.
-
-## Cross-Database References
-
-Cross-database references shall be recorded.
-
-Version 1 shall not attempt to connect to or resolve external databases.
-
-Example:
-
-    ViewA -> OtherDatabase.dbo.TableB
-
-is recorded but not resolved.
-
-## Cross-Server References
-
-Cross-server references shall be recorded.
-
-Version 1 shall not attempt to connect to linked servers.
-
-Example:
-
-    ViewA -> LinkedServer.Database.Schema.Table
-
-is recorded but not resolved.
-
-## Dependency Object Types
-
-Version 1 shall standardize object types as:
-
-- TABLE
-- VIEW
-- PROCEDURE
-- FUNCTION
-- TRIGGER
-- SYNONYM
-- SEQUENCE
-- UNKNOWN
-
-## Dependency Warning Rules
-
-dependency-warnings.md shall report:
-
-### Cross Database
-
-ReferencedDatabase populated.
-
-### Cross Server
-
-ReferencedServer populated.
-
-### Ambiguous References
-
-is_ambiguous = 1
-
-### Caller Dependent References
-
-is_caller_dependent = 1
-
-## Synonym Integration
-
-Exported synonym metadata may be used to improve:
-
-- Dependency reporting
-- Migration analysis
-- Cross-database reference identification
-- Cross-server reference identification
-
-Version 1 dependency extraction remains based on:
-
-    sys.sql_expression_dependencies
-
-Synonym metadata is supplemental information.
-
-## Sprint 1 - Foundation
+### Sprint 1 - Foundation
 
 Completed:
-✅ Project skeleton
-✅ Logging
-✅ Export profile schema
-✅ Get-DefaultExportProfileContent
-✅ Initialize-ExportProfile
-✅ Read-ExportProfile
-✅ Test-ExportDependencies
-✅ Connect-SqlDatabase
-✅ exportinfo.json
-✅ export.log
-✅ Export-DatabaseProperties
-✅ Export-Schemas
-✅ Export-Tables
-✅ Test-FoundationRegression
 
-## Sprint 2 - Core Export
+- Project skeleton
+- Logging
+- Export profile schema
+- Get-DefaultExportProfileContent
+- Initialize-ExportProfile
+- Read-ExportProfile
+- Test-ExportDependencies
+- Connect-SqlDatabase
+- exportinfo.json
+- export.log
+- Test-FoundationRegression
 
-✅ Connect-SqlDatabase
-✅ Export-Schemas
-✅ Export-Tables
-✅ Export-Views
-✅ Export-StoredProcedures
-✅ Export-Functions
-✅ Export-Triggers
-✅ Export-Synonyms
-✅ Export-Sequences
+### Sprint 2 - Core Export
+
+Completed:
+
+- Connect-SqlDatabase
+- Export-DatabaseProperties
+- Export-Schemas
+- Export-Tables
+- Export-Views
+- Export-StoredProcedures
+- Export-Functions
+- Export-Triggers
+- Export-Synonyms
+- Export-Sequences
 
 Regression Coverage:
-✅ Full object export validation
+
+- Full object export validation
 
 Known Technical Debt:
-✅ Read-ExportProfile formatting
-✅ Test-ExportProfile decision pending
+
+- Read-ExportProfile formatting
+- Test-ExportProfile decision pending
 
 Lessons Learned:
-✅ Regression framework became essential
-✅ Object-per-file approach works well
-✅ Metadata headers are valuable
 
-Completed Milestones:
+- Regression framework became essential
+- Object-per-file approach works well
+- Metadata headers are valuable
 
-✅ Foundation
-✅ Core Objec
+### Sprint 3 - Dependency Data
 
-## Sprint 3 - Dependency Data
-
-- Query dependencies
-- Export CSV
-- Export JSON
-- Dependency warnings
-
-### Sprint 3 Build Order
-
-- Create Get-DatabaseDependencies
-- Query sys.sql_expression_dependencies
-- Return standardized dependency objects
-
-### Sprint 3 Progress
-
-Completed
+Completed Deliverables:
 
 - Get-DatabaseDependencies
 - ReferencingFullName
 - ReferencedFullName
 - Export-DependenciesCsv
+- Export-DependenciesJson
+- Export-DependencyWarnings
 - Test-DependencyModel
 
-## Sprint 4 - Dependency Visualization
+Validated By:
+
+- Test-FoundationRegression
+- Test-DependencyModel
+
+Sprint 3 review complete.
+
+### Sprint 4 - Dependency Visualization
+
+Next sprint.
 
 - Generate DOT
 - Generate SVG
 - Generate HTML report
 
-## Sprint 5 - Security
+### Sprint 5 - Security
 
 - Export roles
 - Export users
 - Export permissions
 
-## Sprint 6 - Reference Data
+### Sprint 6 - Reference Data
 
 - Export lookup tables
 - YAML controlled configuration
 
-## Sprint 7 - Profiles
+### Sprint 7 - Profiles
 
 - Named profiles
 - Configuration upgrades
 
-## Sprint 8 - Polish
+### Sprint 8 - Polish
 
 - Dependency filtering
 - Large graph handling
@@ -886,46 +740,35 @@ Completed
 - Known cosmetic defect: Read-ExportProfile validation report formatting
 - Test-ExportProfile: decide if necessary
 
-# Future Analysis Features Wishlist
+## Known Issues
 
-These features are intentionally outside the MVP scope.
-They may require additional SQL queries, performance data, or analysis beyond object export.
+- Read-ExportProfile currently reports validation failures correctly but does not properly render the detailed validation list.
+- The validation logic is correct.
+- Only the formatting of the error report needs improvement.
+- Deferred to Sprint 8.
 
-These items should not influence current architecture unless
-they can be implemented cleanly after the core exporter is complete.
+## Future Enhancements
 
-## Naming Convention Analysis
+### Test Framework Consolidation
 
-Report:
+Create:
 
-- Tables without primary keys
-- Non-standard constraint names
-- Generic index names
-- Objects using reserved words
-- Objects with spaces
-- Mixed naming standards
+```text
+tests\TestFramework.ps1
+```
 
-Output:
+Purpose:
 
-Analysis\
-    NamingStandards.md
+- Shared Write-TestStatus
+- Shared Assert-Condition
+- Shared Invoke-TestStep
 
-# Known Issues
+Consumers:
 
-Read-ExportProfile currently reports validation failures correctly but does not
-properly render the detailed validation list.
+- Test-FoundationRegression.ps1
+- Test-DependencyModel.ps1
 
-The validation logic is correct.
-
-Only the formatting of the error report needs improvement.
-
-Deferred to Sprint 8.
-
----
-
-# Future Enhancements
-
-## SSMS Integration
+### SSMS Integration
 
 Preferred workflow:
 
@@ -947,9 +790,71 @@ for normal usage.
 
 Support explicit parameters for automation.
 
----
+## Future Analysis Features Wishlist
 
-# MVP Definition
+These features are intentionally outside the MVP scope.
+
+They may require additional SQL queries, performance data, or analysis beyond object export.
+
+These items should not influence current architecture unless they can be implemented cleanly after the core exporter is complete.
+
+### Naming Convention Analysis
+
+Report:
+
+- Tables without primary keys
+- Non-standard constraint names
+- Generic index names
+- Objects using reserved words
+- Objects with spaces
+- Mixed naming standards
+
+Output:
+
+```text
+Analysis\
+    NamingStandards.md
+```
+
+### Script Updates
+
+- Evaluate adding:
+
+    USE [<DatabaseName>]
+    GO
+
+  to exported SQL files to reduce accidental deployment into the wrong database.
+
+- Consider making this configurable through export.yaml.
+
+- Review impact on deployment tools and Git diffs before implementation.
+
+### Performance
+
+- Missing Index Recommendations
+- Index Health Analysis
+- View Optimization Analysis
+
+### Upgrade Readiness
+
+- Deprecated Feature Analysis
+- Upgrade Readiness Report
+
+### Security
+
+- Security Risk Analysis
+
+### Data Integrity
+
+- Foreign Key Trust Analysis
+- Constraint Health Analysis
+
+### Dependency Analysis
+
+- Change Impact Analysis
+- Orphaned Object Analysis
+
+## MVP Definition
 
 The first release is complete when it can:
 
@@ -962,70 +867,33 @@ The first release is complete when it can:
 - Export dependency data
 - Generate dependency visualizations
 
----
-
-# Example Export
+## Example Export
 
 ```text
-BannerProd
+
+DatabaseName
 │
 ├── export.yaml
 ├── exportinfo.json
 ├── export.log
 │
+├── Database
+├── Schemas
 ├── Tables
 ├── Views
 ├── StoredProcedures
 ├── Functions
+├── Triggers
+├── Synonyms
+├── Sequences
+├── Security
+├── ReferenceData
 └── Dependencies
     ├── dependencies.csv
     ├── dependencies.json
+    ├── dependency-warnings.md
     ├── dependencies.dot
     ├── dependencies.svg
     └── dependencies.html
 
 ```
-
----
-
-# Future Analysis Features Wishlist
-
-## Script Updates
-
-- Evaluate adding:
-
-    USE [<DatabaseName>]
-    GO
-
-  to exported SQL files to reduce accidental deployment
-  into the wrong database.
-
-- Consider making this configurable through export.yaml.
-
-- Review impact on deployment tools and Git diffs before implementation.
-
-## Performance
-
-- Missing Index Recommendations
-- Index Health Analysis
-- View Optimization Analysis
-
-## Upgrade Readiness
-
-- Deprecated Feature Analysis
-- Upgrade Readiness Report
-
-## Security
-
-- Security Risk Analysis
-
-## Data Integrity
-
-- Foreign Key Trust Analysis
-- Constraint Health Analysis
-
-## Dependency Analysis
-
-- Change Impact Analysis
-- Orphaned Object Analysis
-
