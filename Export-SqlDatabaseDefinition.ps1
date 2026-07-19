@@ -41,6 +41,7 @@ function Get-ScriptVersion {
         System.String
     #>
     [CmdletBinding()]
+    [OutputType([string])]
     param()
 
     return $script:ScriptVersion
@@ -64,6 +65,7 @@ function Initialize-ExportLog {
         System.String
     #>
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter(Mandatory = $true)]
         [string]$OutputFolder
@@ -94,7 +96,7 @@ function Initialize-ExportLog {
     return $script:LogFilePath
 }
 
-function Write-Log {
+function Write-ExporterLog {
     <#
     .SYNOPSIS
         Writes a timestamped log message to the console.
@@ -110,7 +112,7 @@ function Write-Log {
         The message content to write to the log.
 
     .EXAMPLE
-        Write-Log -Level Information -Message 'Starting export'
+        Write-ExporterLog -Level Information -Message 'Starting export'
 
     .OUTPUTS
         None.
@@ -171,6 +173,7 @@ function Get-DefaultExportProfileContent {
         System.String
     #>
     [CmdletBinding()]
+    [OutputType([string])]
     param()
 
     return @'
@@ -248,6 +251,7 @@ function Initialize-ExportProfile {
         System.String
     #>
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter(Mandatory = $true)]
         [ValidateNotNullOrEmpty()]
@@ -263,30 +267,30 @@ function Initialize-ExportProfile {
 
         if (-not (Test-Path -LiteralPath $resolvedOutputFolder -PathType Container)) {
             New-Item -ItemType Directory -Path $resolvedOutputFolder -Force | Out-Null
-            Write-Log -Level Information -Message ("Folder created: {0}" -f $resolvedOutputFolder)
+            Write-ExporterLog -Level Information -Message ("Folder created: {0}" -f $resolvedOutputFolder)
         }
 
         $exportFilePath = [System.IO.Path]::Combine($resolvedOutputFolder, 'export.yaml')
         $resolvedExportFilePath = [System.IO.Path]::GetFullPath($exportFilePath)
 
         if (Test-Path -LiteralPath $resolvedExportFilePath -PathType Leaf) {
-            Write-Log -Level Information -Message ("export.yaml already exists: {0}" -f $resolvedExportFilePath)
+            Write-ExporterLog -Level Information -Message ("export.yaml already exists: {0}" -f $resolvedExportFilePath)
             return $resolvedExportFilePath
         }
 
         if (Test-Path -LiteralPath $resolvedExportFilePath) {
-            Write-Log -Level Error -Message ("Path exists but is not a file: {0}" -f $resolvedExportFilePath)
+            Write-ExporterLog -Level Error -Message ("Path exists but is not a file: {0}" -f $resolvedExportFilePath)
             throw [System.InvalidOperationException]::new("Path exists but is not a file: $resolvedExportFilePath")
         }
 
         $defaultYaml = Get-DefaultExportProfileContent
 
         [System.IO.File]::WriteAllText($resolvedExportFilePath, $defaultYaml, [System.Text.UTF8Encoding]::new($false))
-        Write-Log -Level Information -Message ("export.yaml created: {0}" -f $resolvedExportFilePath)
+        Write-ExporterLog -Level Information -Message ("export.yaml created: {0}" -f $resolvedExportFilePath)
         return $resolvedExportFilePath
     }
     catch {
-        Write-Log -Level Error -Message $_.Exception.Message
+        Write-ExporterLog -Level Error -Message $_.Exception.Message
         throw
     }
 }
@@ -495,12 +499,12 @@ function Read-ExportProfile {
                 $message
             ) -join [Environment]::NewLine
 
-            Write-Log -Level Error -Message $logMessage -ErrorAction Continue
+            Write-ExporterLog -Level Error -Message $logMessage -ErrorAction Continue
             throw [System.InvalidOperationException]::new($message)
         }
 
-        Write-Log -Level Information -Message ("Configuration file loaded: {0}" -f $resolvedPath)
-        Write-Log -Level Information -Message ("Validation successful: {0}" -f $resolvedPath)
+        Write-ExporterLog -Level Information -Message ("Configuration file loaded: {0}" -f $resolvedPath)
+        Write-ExporterLog -Level Information -Message ("Validation successful: {0}" -f $resolvedPath)
         return $config
     }
     catch {
@@ -547,7 +551,7 @@ function Read-ExportProfile {
             'Validation aborted.'
         ) -join [Environment]::NewLine
 
-        Write-Log -Level Error -Message ('Configuration load failed: {0}' -f $displayPath) -ErrorAction Continue
+        Write-ExporterLog -Level Error -Message ('Configuration load failed: {0}' -f $displayPath) -ErrorAction Continue
         throw [System.InvalidOperationException]::new($friendlyMessage)
     }
 }
@@ -631,10 +635,10 @@ function Connect-SqlDatabase {
             throw [System.InvalidOperationException]::new('Only Windows authentication is currently supported.')
         }
 
-        Write-Log -Level Information -Message 'Starting SQL connection'
-        Write-Log -Level Information -Message ("Server name: {0}" -f $serverName)
-        Write-Log -Level Information -Message ("Database name: {0}" -f $databaseName)
-        Write-Log -Level Information -Message ("Authentication mode: {0}" -f $authentication)
+        Write-ExporterLog -Level Information -Message 'Starting SQL connection'
+        Write-ExporterLog -Level Information -Message ("Server name: {0}" -f $serverName)
+        Write-ExporterLog -Level Information -Message ("Database name: {0}" -f $databaseName)
+        Write-ExporterLog -Level Information -Message ("Authentication mode: {0}" -f $authentication)
 
         $sqlServerModule = Get-Module -ListAvailable -Name 'SqlServer' | Select-Object -First 1
         if ($null -eq $sqlServerModule) {
@@ -671,14 +675,14 @@ function Connect-SqlDatabase {
             throw [System.InvalidOperationException]::new(("Could not connect to SQL Server: {0}" -f $serverName))
         }
 
-        Write-Log -Level Information -Message 'Connection successful'
+        Write-ExporterLog -Level Information -Message 'Connection successful'
 
         $database = $server.Databases[$databaseName]
         if ($null -eq $database) {
             throw [System.InvalidOperationException]::new(("Database was not found on the server: {0}" -f $databaseName))
         }
 
-        Write-Log -Level Information -Message 'Database found'
+        Write-ExporterLog -Level Information -Message 'Database found'
 
         return [PSCustomObject]@{
             ServerName = $serverName
@@ -690,7 +694,7 @@ function Connect-SqlDatabase {
         }
     }
     catch {
-        Write-Log -Level Error -Message ('Connection failure') -ErrorAction Continue
+        Write-ExporterLog -Level Error -Message ('Connection failure') -ErrorAction Continue
         throw
     }
 }
@@ -764,10 +768,10 @@ function Write-ExportInfo {
             throw [System.InvalidOperationException]::new('Connection.DatabaseObject cannot be null.')
         }
 
-        Write-Log -Level Information -Message 'Starting exportinfo.json creation'
+        Write-ExporterLog -Level Information -Message 'Starting exportinfo.json creation'
 
         $exportInfoPath = [System.IO.Path]::Combine($resolvedOutputFolder, 'exportinfo.json')
-        Write-Log -Level Information -Message ("Output path: {0}" -f $exportInfoPath)
+        Write-ExporterLog -Level Information -Message ("Output path: {0}" -f $exportInfoPath)
 
         $databaseObject = $Connection.DatabaseObject
 
@@ -830,11 +834,11 @@ function Write-ExportInfo {
         $json = $exportInfo | ConvertTo-Json -Depth 6
         [System.IO.File]::WriteAllText($exportInfoPath, $json, [System.Text.UTF8Encoding]::new($false))
 
-        Write-Log -Level Information -Message 'exportinfo.json written successfully'
+        Write-ExporterLog -Level Information -Message 'exportinfo.json written successfully'
         return $exportInfoPath
     }
     catch {
-        Write-Log -Level Error -Message ('Error creating exportinfo.json: {0}' -f $_.Exception.Message) -ErrorAction Continue
+        Write-ExporterLog -Level Error -Message ('Error creating exportinfo.json: {0}' -f $_.Exception.Message) -ErrorAction Continue
         throw [System.InvalidOperationException]::new(('Failed to create exportinfo.json. {0}' -f $_.Exception.Message))
     }
 }
@@ -888,7 +892,7 @@ function Export-DatabaseProperties {
             throw [System.InvalidOperationException]::new(("OutputFolder does not exist: {0}" -f $resolvedOutputFolder))
         }
 
-        Write-Log -Level Information -Message 'Starting Database Properties export'
+        Write-ExporterLog -Level Information -Message 'Starting Database Properties export'
 
         $databaseFolder = [System.IO.Path]::Combine($resolvedOutputFolder, 'Database')
         if (-not (Test-Path -LiteralPath $databaseFolder -PathType Container)) {
@@ -896,7 +900,7 @@ function Export-DatabaseProperties {
         }
 
         $databaseSqlPath = [System.IO.Path]::Combine($databaseFolder, 'Database.sql')
-        Write-Log -Level Information -Message ("Output path: {0}" -f $databaseSqlPath)
+        Write-ExporterLog -Level Information -Message ("Output path: {0}" -f $databaseSqlPath)
 
         $database = $Connection.DatabaseObject
 
@@ -954,11 +958,11 @@ function Export-DatabaseProperties {
 
         [System.IO.File]::WriteAllText($databaseSqlPath, $content, [System.Text.UTF8Encoding]::new($false))
 
-        Write-Log -Level Information -Message 'Database.sql created successfully'
+        Write-ExporterLog -Level Information -Message 'Database.sql created successfully'
         return $databaseSqlPath
     }
     catch {
-        Write-Log -Level Error -Message ('Database export failed: {0}' -f $_.Exception.Message) -ErrorAction Continue
+        Write-ExporterLog -Level Error -Message ('Database export failed: {0}' -f $_.Exception.Message) -ErrorAction Continue
         throw [System.InvalidOperationException]::new(('Failed to export database properties. {0}' -f $_.Exception.Message))
     }
 }
@@ -1012,7 +1016,7 @@ function Export-Schemas {
             throw [System.InvalidOperationException]::new(("OutputFolder does not exist: {0}" -f $resolvedOutputFolder))
         }
 
-        Write-Log -Level Information -Message 'Starting schema export'
+        Write-ExporterLog -Level Information -Message 'Starting schema export'
 
         $schemasFolder = [System.IO.Path]::Combine($resolvedOutputFolder, 'Schemas')
         if (-not (Test-Path -LiteralPath $schemasFolder -PathType Container)) {
@@ -1031,7 +1035,7 @@ function Export-Schemas {
                 Sort-Object -Property Name
         )
 
-        Write-Log -Level Information -Message ("Number of schemas found: {0}" -f $schemasToExport.Count)
+        Write-ExporterLog -Level Information -Message ("Number of schemas found: {0}" -f $schemasToExport.Count)
 
         $exportedFiles = [System.Collections.Generic.List[string]]::new()
 
@@ -1069,10 +1073,10 @@ function Export-Schemas {
 
             [System.IO.File]::WriteAllText($schemaFilePath, $schemaScript, [System.Text.UTF8Encoding]::new($false))
             $exportedFiles.Add($schemaFilePath)
-            Write-Log -Level Information -Message ("Schema file created: {0}" -f $schemaFilePath)
+            Write-ExporterLog -Level Information -Message ("Schema file created: {0}" -f $schemaFilePath)
         }
 
-        Write-Log -Level Information -Message 'Schema export completed'
+        Write-ExporterLog -Level Information -Message 'Schema export completed'
 
         return [PSCustomObject]@{
             SchemaCount = $schemasToExport.Count
@@ -1081,7 +1085,7 @@ function Export-Schemas {
         }
     }
     catch {
-        Write-Log -Level Error -Message ('Schema export failed: {0}' -f $_.Exception.Message) -ErrorAction Continue
+        Write-ExporterLog -Level Error -Message ('Schema export failed: {0}' -f $_.Exception.Message) -ErrorAction Continue
         throw [System.InvalidOperationException]::new(('Failed to export schemas. {0}' -f $_.Exception.Message))
     }
 }
@@ -1135,10 +1139,10 @@ function Export-Tables {
             throw [System.InvalidOperationException]::new(("OutputFolder does not exist: {0}" -f $resolvedOutputFolder))
         }
 
-        Write-Log -Level Information -Message 'Starting table export'
+        Write-ExporterLog -Level Information -Message 'Starting table export'
 
         $tablesFolder = [System.IO.Path]::Combine($resolvedOutputFolder, 'Tables')
-        Write-Log -Level Information -Message ("Output folder: {0}" -f $tablesFolder)
+        Write-ExporterLog -Level Information -Message ("Output folder: {0}" -f $tablesFolder)
 
         if (-not (Test-Path -LiteralPath $tablesFolder -PathType Container)) {
             New-Item -ItemType Directory -Path $tablesFolder -Force | Out-Null
@@ -1182,7 +1186,7 @@ function Export-Tables {
                 Sort-Object -Property Schema, Name
         )
 
-        Write-Log -Level Information -Message ("Number of user tables found: {0}" -f $userTables.Count)
+        Write-ExporterLog -Level Information -Message ("Number of user tables found: {0}" -f $userTables.Count)
 
         $scriptingOptions = New-Object Microsoft.SqlServer.Management.Smo.ScriptingOptions
         $scriptingOptions.ScriptSchema = $true
@@ -1204,6 +1208,7 @@ function Export-Tables {
             }
             catch {
                 # Ignore unsupported scripting options on older/different SMO versions.
+                $null = $_
             }
         }
 
@@ -1234,10 +1239,10 @@ function Export-Tables {
 
             [System.IO.File]::WriteAllText($tableFilePath, $tableScript, [System.Text.UTF8Encoding]::new($false))
             $exportedFiles.Add($tableFilePath)
-            Write-Log -Level Information -Message ("Table file created: {0}" -f $tableFilePath)
+            Write-ExporterLog -Level Information -Message ("Table file created: {0}" -f $tableFilePath)
         }
 
-        Write-Log -Level Information -Message 'Table export completed'
+        Write-ExporterLog -Level Information -Message 'Table export completed'
 
         return [PSCustomObject]@{
             TableCount = $userTables.Count
@@ -1246,7 +1251,7 @@ function Export-Tables {
         }
     }
     catch {
-        Write-Log -Level Error -Message ('Table export failed: {0}' -f $_.Exception.Message) -ErrorAction Continue
+        Write-ExporterLog -Level Error -Message ('Table export failed: {0}' -f $_.Exception.Message) -ErrorAction Continue
         throw [System.InvalidOperationException]::new(('Failed to export tables. {0}' -f $_.Exception.Message))
     }
 }
@@ -1300,7 +1305,7 @@ function Export-Views {
             throw [System.InvalidOperationException]::new(("OutputFolder does not exist: {0}" -f $resolvedOutputFolder))
         }
 
-        Write-Log -Level Information -Message 'Starting view export'
+        Write-ExporterLog -Level Information -Message 'Starting view export'
 
         $viewsFolder = [System.IO.Path]::Combine($resolvedOutputFolder, 'Views')
         if (-not (Test-Path -LiteralPath $viewsFolder -PathType Container)) {
@@ -1345,7 +1350,7 @@ function Export-Views {
                 Sort-Object -Property Schema, Name
         )
 
-        Write-Log -Level Information -Message ("Number of views found: {0}" -f $userViews.Count)
+        Write-ExporterLog -Level Information -Message ("Number of views found: {0}" -f $userViews.Count)
 
         $scriptingOptions = New-Object Microsoft.SqlServer.Management.Smo.ScriptingOptions
         $scriptingOptions.ScriptSchema = $true
@@ -1361,6 +1366,7 @@ function Export-Views {
         }
         catch {
             # Ignore unsupported scripting options on older/different SMO versions.
+            $null = $_
         }
 
         $invalidFileNameCharacters = [System.IO.Path]::GetInvalidFileNameChars()
@@ -1390,10 +1396,10 @@ function Export-Views {
 
             [System.IO.File]::WriteAllText($viewFilePath, $viewScript, [System.Text.UTF8Encoding]::new($false))
             $exportedFiles.Add($viewFilePath)
-            Write-Log -Level Information -Message ("View file created: {0}" -f $viewFilePath)
+            Write-ExporterLog -Level Information -Message ("View file created: {0}" -f $viewFilePath)
         }
 
-        Write-Log -Level Information -Message 'View export complete'
+        Write-ExporterLog -Level Information -Message 'View export complete'
 
         return [PSCustomObject]@{
             ViewCount = $userViews.Count
@@ -1402,7 +1408,7 @@ function Export-Views {
         }
     }
     catch {
-        Write-Log -Level Error -Message ('View export failed: {0}' -f $_.Exception.Message) -ErrorAction Continue
+        Write-ExporterLog -Level Error -Message ('View export failed: {0}' -f $_.Exception.Message) -ErrorAction Continue
         throw [System.InvalidOperationException]::new(('Failed to export views. {0}' -f $_.Exception.Message))
     }
 }
@@ -1456,7 +1462,7 @@ function Export-StoredProcedures {
             throw [System.InvalidOperationException]::new(("OutputFolder does not exist: {0}" -f $resolvedOutputFolder))
         }
 
-        Write-Log -Level Information -Message 'Starting stored procedure export'
+        Write-ExporterLog -Level Information -Message 'Starting stored procedure export'
 
         $proceduresFolder = [System.IO.Path]::Combine($resolvedOutputFolder, 'StoredProcedures')
         if (-not (Test-Path -LiteralPath $proceduresFolder -PathType Container)) {
@@ -1502,7 +1508,7 @@ function Export-StoredProcedures {
                 Sort-Object -Property Schema, Name
         )
 
-        Write-Log -Level Information -Message ("Procedure count: {0}" -f $userProcedures.Count)
+        Write-ExporterLog -Level Information -Message ("Procedure count: {0}" -f $userProcedures.Count)
 
         $scriptingOptions = New-Object Microsoft.SqlServer.Management.Smo.ScriptingOptions
         $scriptingOptions.ScriptSchema = $true
@@ -1518,6 +1524,7 @@ function Export-StoredProcedures {
         }
         catch {
             # Ignore unsupported scripting options on older/different SMO versions.
+            $null = $_
         }
 
         $invalidFileNameCharacters = [System.IO.Path]::GetInvalidFileNameChars()
@@ -1547,10 +1554,10 @@ function Export-StoredProcedures {
 
             [System.IO.File]::WriteAllText($procedureFilePath, $procedureScript, [System.Text.UTF8Encoding]::new($false))
             $exportedFiles.Add($procedureFilePath)
-            Write-Log -Level Information -Message ("Stored procedure exported: {0}" -f $procedureFilePath)
+            Write-ExporterLog -Level Information -Message ("Stored procedure exported: {0}" -f $procedureFilePath)
         }
 
-        Write-Log -Level Information -Message 'Stored procedure export completed'
+        Write-ExporterLog -Level Information -Message 'Stored procedure export completed'
 
         return [PSCustomObject]@{
             ProcedureCount = $userProcedures.Count
@@ -1559,7 +1566,7 @@ function Export-StoredProcedures {
         }
     }
     catch {
-        Write-Log -Level Error -Message ('Stored procedure export failed: {0}' -f $_.Exception.Message) -ErrorAction Continue
+        Write-ExporterLog -Level Error -Message ('Stored procedure export failed: {0}' -f $_.Exception.Message) -ErrorAction Continue
         throw [System.InvalidOperationException]::new(('Failed to export stored procedures. {0}' -f $_.Exception.Message))
     }
 }
@@ -1613,7 +1620,7 @@ function Export-Functions {
             throw [System.InvalidOperationException]::new(("OutputFolder does not exist: {0}" -f $resolvedOutputFolder))
         }
 
-        Write-Log -Level Information -Message 'Starting function export'
+        Write-ExporterLog -Level Information -Message 'Starting function export'
 
         $functionsFolder = [System.IO.Path]::Combine($resolvedOutputFolder, 'Functions')
         if (-not (Test-Path -LiteralPath $functionsFolder -PathType Container)) {
@@ -1659,7 +1666,7 @@ function Export-Functions {
                 Sort-Object -Property Schema, Name
         )
 
-        Write-Log -Level Information -Message ("Function count: {0}" -f $userFunctions.Count)
+        Write-ExporterLog -Level Information -Message ("Function count: {0}" -f $userFunctions.Count)
 
         $scriptingOptions = New-Object Microsoft.SqlServer.Management.Smo.ScriptingOptions
         $scriptingOptions.ScriptSchema = $true
@@ -1675,6 +1682,7 @@ function Export-Functions {
         }
         catch {
             # Ignore unsupported scripting options on older/different SMO versions.
+            $null = $_
         }
 
         $invalidFileNameCharacters = [System.IO.Path]::GetInvalidFileNameChars()
@@ -1704,10 +1712,10 @@ function Export-Functions {
 
             [System.IO.File]::WriteAllText($functionFilePath, $functionScript, [System.Text.UTF8Encoding]::new($false))
             $exportedFiles.Add($functionFilePath)
-            Write-Log -Level Information -Message ("Function exported: {0}" -f $functionFilePath)
+            Write-ExporterLog -Level Information -Message ("Function exported: {0}" -f $functionFilePath)
         }
 
-        Write-Log -Level Information -Message 'Function export completed'
+        Write-ExporterLog -Level Information -Message 'Function export completed'
 
         return [PSCustomObject]@{
             FunctionCount = $userFunctions.Count
@@ -1716,7 +1724,7 @@ function Export-Functions {
         }
     }
     catch {
-        Write-Log -Level Error -Message ('Function export failed: {0}' -f $_.Exception.Message) -ErrorAction Continue
+        Write-ExporterLog -Level Error -Message ('Function export failed: {0}' -f $_.Exception.Message) -ErrorAction Continue
         throw [System.InvalidOperationException]::new(('Failed to export functions. {0}' -f $_.Exception.Message))
     }
 }
@@ -1770,7 +1778,7 @@ function Export-Triggers {
             throw [System.InvalidOperationException]::new(("OutputFolder does not exist: {0}" -f $resolvedOutputFolder))
         }
 
-        Write-Log -Level Information -Message 'Starting trigger export'
+        Write-ExporterLog -Level Information -Message 'Starting trigger export'
 
         $triggersFolder = [System.IO.Path]::Combine($resolvedOutputFolder, 'Triggers')
         if (-not (Test-Path -LiteralPath $triggersFolder -PathType Container)) {
@@ -1900,7 +1908,7 @@ function Export-Triggers {
                 Sort-Object -Property ScopeOrder, SchemaName, TriggerName
         )
 
-        Write-Log -Level Information -Message ("Trigger count: {0}" -f $orderedTriggers.Count)
+        Write-ExporterLog -Level Information -Message ("Trigger count: {0}" -f $orderedTriggers.Count)
 
         $databaseTriggerCount = @($orderedTriggers | Where-Object { $_.TriggerType -eq 'Database' }).Count
         $ddlTriggerCount = @($orderedTriggers | Where-Object { $_.TriggerType -eq 'DDL' }).Count
@@ -1920,6 +1928,7 @@ function Export-Triggers {
         }
         catch {
             # Ignore unsupported scripting options on older/different SMO versions.
+            $null = $_
         }
 
         $invalidFileNameCharacters = [System.IO.Path]::GetInvalidFileNameChars()
@@ -1946,7 +1955,7 @@ function Export-Triggers {
                 $triggerLogLines += ("    Parent: {0}" -f $parentObject)
             }
 
-            Write-Log -Level Information -Message ($triggerLogLines -join [Environment]::NewLine)
+            Write-ExporterLog -Level Information -Message ($triggerLogLines -join [Environment]::NewLine)
 
             $scriptLines = @()
             try {
@@ -1975,10 +1984,10 @@ function Export-Triggers {
 
             [System.IO.File]::WriteAllText($triggerFilePath, $triggerScript, [System.Text.UTF8Encoding]::new($false))
             $exportedFiles.Add($triggerFilePath)
-            Write-Log -Level Information -Message ("Trigger exported: {0}" -f $triggerFilePath)
+            Write-ExporterLog -Level Information -Message ("Trigger exported: {0}" -f $triggerFilePath)
         }
 
-        Write-Log -Level Information -Message 'Trigger export completed'
+        Write-ExporterLog -Level Information -Message 'Trigger export completed'
 
         return [PSCustomObject]@{
             TriggerCount = $orderedTriggers.Count
@@ -1990,7 +1999,7 @@ function Export-Triggers {
         }
     }
     catch {
-        Write-Log -Level Error -Message ('Trigger export failed: {0}' -f $_.Exception.Message) -ErrorAction Continue
+        Write-ExporterLog -Level Error -Message ('Trigger export failed: {0}' -f $_.Exception.Message) -ErrorAction Continue
         throw [System.InvalidOperationException]::new(('Failed to export triggers. {0}' -f $_.Exception.Message))
     }
 }
@@ -2044,7 +2053,7 @@ function Export-Synonyms {
             throw [System.InvalidOperationException]::new(("OutputFolder does not exist: {0}" -f $resolvedOutputFolder))
         }
 
-        Write-Log -Level Information -Message 'Starting synonym export'
+        Write-ExporterLog -Level Information -Message 'Starting synonym export'
 
         $synonymsFolder = [System.IO.Path]::Combine($resolvedOutputFolder, 'Synonyms')
         if (-not (Test-Path -LiteralPath $synonymsFolder -PathType Container)) {
@@ -2120,7 +2129,7 @@ function Export-Synonyms {
                 Sort-Object -Property Schema, Name
         )
 
-        Write-Log -Level Information -Message ("Synonym count: {0}" -f $userSynonyms.Count)
+        Write-ExporterLog -Level Information -Message ("Synonym count: {0}" -f $userSynonyms.Count)
 
         $scriptingOptions = New-Object Microsoft.SqlServer.Management.Smo.ScriptingOptions
         $scriptingOptions.ScriptSchema = $true
@@ -2136,6 +2145,7 @@ function Export-Synonyms {
         }
         catch {
             # Ignore unsupported scripting options on older/different SMO versions.
+            $null = $_
         }
 
         $invalidFileNameCharacters = [System.IO.Path]::GetInvalidFileNameChars()
@@ -2184,7 +2194,7 @@ function Export-Synonyms {
                 throw [System.InvalidOperationException]::new(("Synonym base object is missing for [{0}].[{1}]." -f $schemaName, $synonymName))
             }
 
-            Write-Log -Level Information -Message ((
+            Write-ExporterLog -Level Information -Message ((
                 'Exporting synonym:{0}    Name: {1}.{2}{0}    Base Object: {3}' -f
                 [Environment]::NewLine,
                 $schemaName,
@@ -2232,10 +2242,10 @@ function Export-Synonyms {
 
             [System.IO.File]::WriteAllText($synonymFilePath, $synonymScript, [System.Text.UTF8Encoding]::new($false))
             $exportedFiles.Add($synonymFilePath)
-            Write-Log -Level Information -Message ("Synonym exported: {0}" -f $synonymFilePath)
+            Write-ExporterLog -Level Information -Message ("Synonym exported: {0}" -f $synonymFilePath)
         }
 
-        Write-Log -Level Information -Message 'Synonym export completed'
+        Write-ExporterLog -Level Information -Message 'Synonym export completed'
 
         return [PSCustomObject]@{
             SynonymCount = $userSynonyms.Count
@@ -2244,7 +2254,7 @@ function Export-Synonyms {
         }
     }
     catch {
-        Write-Log -Level Error -Message ('Synonym export failed: {0}' -f $_.Exception.Message) -ErrorAction Continue
+        Write-ExporterLog -Level Error -Message ('Synonym export failed: {0}' -f $_.Exception.Message) -ErrorAction Continue
         throw [System.InvalidOperationException]::new(('Failed to export synonyms. {0}' -f $_.Exception.Message))
     }
 }
@@ -2298,7 +2308,7 @@ function Export-Sequences {
             throw [System.InvalidOperationException]::new(("OutputFolder does not exist: {0}" -f $resolvedOutputFolder))
         }
 
-        Write-Log -Level Information -Message 'Starting sequence export'
+        Write-ExporterLog -Level Information -Message 'Starting sequence export'
 
         $sequencesFolder = [System.IO.Path]::Combine($resolvedOutputFolder, 'Sequences')
         if (-not (Test-Path -LiteralPath $sequencesFolder -PathType Container)) {
@@ -2414,7 +2424,7 @@ function Export-Sequences {
                 Sort-Object -Property Schema, Name
         )
 
-        Write-Log -Level Information -Message ("Sequence count: {0}" -f $userSequences.Count)
+        Write-ExporterLog -Level Information -Message ("Sequence count: {0}" -f $userSequences.Count)
 
         $scriptingOptions = New-Object Microsoft.SqlServer.Management.Smo.ScriptingOptions
         $scriptingOptions.ScriptSchema = $true
@@ -2430,6 +2440,7 @@ function Export-Sequences {
         }
         catch {
             # Ignore unsupported scripting options on older/different SMO versions.
+            $null = $_
         }
 
         $invalidFileNameCharacters = [System.IO.Path]::GetInvalidFileNameChars()
@@ -2487,7 +2498,7 @@ function Export-Sequences {
             $maximumValueText = (& $toInvariantString -Value $maximumValue)
             $cacheSizeText = (& $toInvariantString -Value $cacheSize)
 
-            Write-Log -Level Information -Message ("Exporting sequence: {0}.{1}" -f $schemaName, $sequenceName)
+            Write-ExporterLog -Level Information -Message ("Exporting sequence: {0}.{1}" -f $schemaName, $sequenceName)
 
             $scriptLines = @()
             $usedManualScripting = $false
@@ -2589,10 +2600,10 @@ function Export-Sequences {
 
             [System.IO.File]::WriteAllText($sequenceFilePath, $sequenceScript, [System.Text.UTF8Encoding]::new($false))
             $exportedFiles.Add($sequenceFilePath)
-            Write-Log -Level Information -Message ("Sequence exported: {0}" -f $sequenceFilePath)
+            Write-ExporterLog -Level Information -Message ("Sequence exported: {0}" -f $sequenceFilePath)
         }
 
-        Write-Log -Level Information -Message 'Sequence export completed'
+        Write-ExporterLog -Level Information -Message 'Sequence export completed'
 
         return [PSCustomObject]@{
             SequenceCount = $userSequences.Count
@@ -2601,7 +2612,7 @@ function Export-Sequences {
         }
     }
     catch {
-        Write-Log -Level Error -Message ('Sequence export failed: {0}' -f $_.Exception.Message) -ErrorAction Continue
+        Write-ExporterLog -Level Error -Message ('Sequence export failed: {0}' -f $_.Exception.Message) -ErrorAction Continue
         throw [System.InvalidOperationException]::new(('Failed to export sequences. {0}' -f $_.Exception.Message))
     }
 }
@@ -2624,7 +2635,7 @@ function Export-SqlDatabaseDefinition {
 
     $version = Get-ScriptVersion
     Write-Information -MessageData ("Version: {0}" -f $version) -InformationAction Continue
-    Write-Log -Level Information -Message 'Starting export'
+    Write-ExporterLog -Level Information -Message 'Starting export'
     return $version
 }
 #endregion
@@ -2685,7 +2696,7 @@ function Test-ExportDependencies {
     $installCommands = [System.Collections.Generic.List[string]]::new()
     $dependencyDetails = [System.Collections.Generic.List[object]]::new()
 
-    Write-Log -Level Information -Message 'Dependency Check Started'
+    Write-ExporterLog -Level Information -Message 'Dependency Check Started'
 
     foreach ($dependency in $dependencies) {
         $isInstalled = $false
@@ -2708,14 +2719,14 @@ function Test-ExportDependencies {
                     $detail.Installed = $true
                     $detail.Message = ("PASS: {0}" -f $dependency.Name)
                     $installedDependencies.Add(("PowerShell {0}" -f $currentPowerShellVersion.ToString()))
-                    Write-Log -Level Information -Message ("PASS: {0}" -f $dependency.Name)
+                    Write-ExporterLog -Level Information -Message ("PASS: {0}" -f $dependency.Name)
                 }
                 else {
                     $detail.Message = ("ERROR: {0} not installed. {1}" -f $dependency.Name, $dependency.InstallCommand)
                     $missingDependencies.Add($dependency.Name)
                     $installCommands.Add($dependency.InstallCommand)
-                    Write-Log -Level Error -Message ("ERROR: {0} not installed. {1}" -f $dependency.Name, $dependency.InstallCommand)
-                    Write-Log -Level Information -Message ("Install: {0}" -f $dependency.InstallCommand)
+                    Write-ExporterLog -Level Error -Message ("ERROR: {0} not installed. {1}" -f $dependency.Name, $dependency.InstallCommand)
+                    Write-ExporterLog -Level Information -Message ("Install: {0}" -f $dependency.InstallCommand)
                 }
             }
             'powershell-yaml' {
@@ -2730,14 +2741,14 @@ function Test-ExportDependencies {
                     $detail.Installed = $true
                     $detail.Message = 'PASS: powershell-yaml'
                     $installedDependencies.Add('ConvertFrom-Yaml')
-                    Write-Log -Level Information -Message 'PASS: powershell-yaml'
+                    Write-ExporterLog -Level Information -Message 'PASS: powershell-yaml'
                 }
                 else {
                     $detail.Message = ("ERROR: powershell-yaml not installed. {0}" -f $dependency.InstallCommand)
                     $missingDependencies.Add($dependency.Name)
                     $installCommands.Add($dependency.InstallCommand)
-                    Write-Log -Level Error -Message ("ERROR: powershell-yaml not installed. {0}" -f $dependency.InstallCommand)
-                    Write-Log -Level Information -Message ("Install: {0}" -f $dependency.InstallCommand)
+                    Write-ExporterLog -Level Error -Message ("ERROR: powershell-yaml not installed. {0}" -f $dependency.InstallCommand)
+                    Write-ExporterLog -Level Information -Message ("Install: {0}" -f $dependency.InstallCommand)
                 }
             }
             'SqlServer' {
@@ -2747,14 +2758,14 @@ function Test-ExportDependencies {
                     $detail.Installed = $true
                     $detail.Message = 'PASS: SqlServer (ready for upcoming Connect-SqlDatabase milestone)'
                     $installedDependencies.Add('SqlServer')
-                    Write-Log -Level Information -Message 'PASS: SqlServer (ready for upcoming Connect-SqlDatabase milestone)'
+                    Write-ExporterLog -Level Information -Message 'PASS: SqlServer (ready for upcoming Connect-SqlDatabase milestone)'
                 }
                 else {
                     $detail.Message = 'INFO: SqlServer not installed (optional today; required before Connect-SqlDatabase can succeed). Install-Module SqlServer -Scope CurrentUser'
                     $missingDependencies.Add($dependency.Name)
                     $installCommands.Add($dependency.InstallCommand)
-                    Write-Log -Level Information -Message 'INFO: SqlServer not installed (optional today; required before Connect-SqlDatabase can succeed)'
-                    Write-Log -Level Information -Message ("Install: {0}" -f $dependency.InstallCommand)
+                    Write-ExporterLog -Level Information -Message 'INFO: SqlServer not installed (optional today; required before Connect-SqlDatabase can succeed)'
+                    Write-ExporterLog -Level Information -Message ("Install: {0}" -f $dependency.InstallCommand)
                 }
             }
             'Graphviz' {
@@ -2764,14 +2775,14 @@ function Test-ExportDependencies {
                     $detail.Installed = $true
                     $detail.Message = 'PASS: Graphviz'
                     $installedDependencies.Add('Graphviz')
-                    Write-Log -Level Information -Message 'PASS: Graphviz'
+                    Write-ExporterLog -Level Information -Message 'PASS: Graphviz'
                 }
                 else {
                     $detail.Message = 'INFO: Graphviz not installed (optional)'
                     $missingDependencies.Add($dependency.Name)
                     $installCommands.Add($dependency.InstallCommand)
-                    Write-Log -Level Information -Message 'INFO: Graphviz not installed (optional)'
-                    Write-Log -Level Information -Message ("Install: {0}" -f $dependency.InstallCommand)
+                    Write-ExporterLog -Level Information -Message 'INFO: Graphviz not installed (optional)'
+                    Write-ExporterLog -Level Information -Message ("Install: {0}" -f $dependency.InstallCommand)
                 }
             }
         }
@@ -2783,7 +2794,7 @@ function Test-ExportDependencies {
         $dependencyDetails.Add($detail)
     }
 
-    Write-Log -Level Information -Message 'Dependency Check Complete'
+    Write-ExporterLog -Level Information -Message 'Dependency Check Complete'
 
     $missingRequiredDependencies = @(
         $dependencyDetails | Where-Object {
@@ -2814,7 +2825,8 @@ try {
     exit 0
 }
 catch {
-    Write-Log -Level Error -Message $_.Exception.Message
+    Write-ExporterLog -Level Error -Message $_.Exception.Message
     exit 1
 }
 #endregion
+

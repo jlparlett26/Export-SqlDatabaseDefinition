@@ -147,6 +147,41 @@ Install-Module PSScriptAnalyzer -Scope CurrentUser
 Purpose:
 Static analysis and code quality validation.
 
+## Quality Gates
+
+Before closing a sprint:
+
+- Regression tests must pass.
+- New warnings must be reviewed.
+- High-confidence warnings should be corrected.
+- Any intentionally deferred warnings should be documented. 
+
+- Invoke-ScriptAnalyzer must be executed.
+    PSScriptAnalyzer Exceptions
+        PSUseSingularNouns
+        Export-* functions intentionally use plural nouns because they export collections of objects rather than a single object.
+        This warning is accepted by design.
+
+PSScriptAnalyzer Exceptions
+Known Accepted Warnings
+``
+PSUseSingularNouns
+
+Accepted by design.
+
+Export-* functions intentionally use plural nouns because they
+export collections of database objects rather than a single object.
+
+Examples:
+
+- Export-Tables
+- Export-Views
+- Export-Functions
+- Export-Triggers
+
+This warning will not be remediated.
+``
+
 ## Repository Separation
 
 1. The exporter project repository shall never contain exported database artifacts.
@@ -166,7 +201,7 @@ C:\Work\Code\Export-SqlDatabaseDefinition
 Database Export:
 
 ```text
-D:\DatabaseExports\BannerProd
+D:\DatabaseExports\SomeDatabaseName
 ```
 
 ## Export Folder Ownership
@@ -563,6 +598,123 @@ Controlled entirely through YAML.
 
 # Development Roadmap
 
+# Sprint 3 Dependency Analysis Design Decisions
+
+## Canonical Dependency Source
+
+Version 1 shall use:
+
+    sys.sql_expression_dependencies
+
+as the authoritative dependency source.
+
+Known limitations:
+
+- Dynamic SQL may not be detected.
+- Some synonym scenarios may not fully resolve.
+- SQL Server dependency metadata is accepted as authoritative for Version 1.
+
+## Canonical Dependency Object Model
+
+All dependency exports shall be generated from a single in-memory dependency model.
+
+Minimum fields:
+
+- ReferencingObject
+- ReferencingSchema
+- ReferencingType
+
+- ReferencedServer
+- ReferencedDatabase
+- ReferencedSchema
+- ReferencedObject
+
+- IsSchemaBound
+- IsCallerDependent
+- IsAmbiguous
+
+Future dependency outputs:
+
+- dependencies.csv
+- dependencies.json
+- dependencies.dot
+- dependencies.svg
+- dependencies.html
+
+must be generated from this model.
+
+## Cross-Database References
+
+Cross-database references shall be recorded.
+
+Version 1 shall not attempt to connect to or resolve external databases.
+
+Example:
+
+    ViewA -> OtherDatabase.dbo.TableB
+
+is recorded but not resolved.
+
+## Cross-Server References
+
+Cross-server references shall be recorded.
+
+Version 1 shall not attempt to connect to linked servers.
+
+Example:
+
+    ViewA -> LinkedServer.Database.Schema.Table
+
+is recorded but not resolved.
+
+## Dependency Object Types
+
+Version 1 shall standardize object types as:
+
+- TABLE
+- VIEW
+- PROCEDURE
+- FUNCTION
+- TRIGGER
+- SYNONYM
+- SEQUENCE
+- UNKNOWN
+
+## Dependency Warning Rules
+
+dependency-warnings.md shall report:
+
+### Cross Database
+
+ReferencedDatabase populated.
+
+### Cross Server
+
+ReferencedServer populated.
+
+### Ambiguous References
+
+is_ambiguous = 1
+
+### Caller Dependent References
+
+is_caller_dependent = 1
+
+## Synonym Integration
+
+Exported synonym metadata may be used to improve:
+
+- Dependency reporting
+- Migration analysis
+- Cross-database reference identification
+- Cross-server reference identification
+
+Version 1 dependency extraction remains based on:
+
+    sys.sql_expression_dependencies
+
+Synonym metadata is supplemental information.
+
 ## Sprint 1 - Foundation
 
 Completed:
@@ -617,6 +769,12 @@ Completed Milestones:
 - Export JSON
 - Dependency warnings
 
+### Sprint 3 Build Order
+
+- Create Get-DatabaseDependencies
+- Query sys.sql_expression_dependencies
+- Return standardized dependency objects
+
 ## Sprint 4 - Dependency Visualization
 
 - Generate DOT
@@ -649,7 +807,7 @@ Completed Milestones:
 - Generate dependency report from Test-ExportDependencies
 - Export dependency status to exportinfo.json
 - Known cosmetic defect: Read-ExportProfile validation report formatting
- - Test-ExportProfile: decide if necessary
+- Test-ExportProfile: decide if necessary
 
 # Future Analysis Features Wishlist
 
