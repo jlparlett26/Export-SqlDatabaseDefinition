@@ -54,6 +54,31 @@ $script:Dependencies = @()
 $script:ProfilePath = $null
 $script:ResolvedOutputFolder = $null
 $script:DependenciesLoaded = $false
+$script:ProjectRoot = Split-Path -Parent $PSScriptRoot
+$script:ExporterScriptPath = Join-Path $script:ProjectRoot 'Export-SqlDatabaseDefinition.ps1'
+
+if (-not (Test-Path -LiteralPath $script:ExporterScriptPath -PathType Leaf)) {
+    throw "Exporter script was not found: $script:ExporterScriptPath"
+}
+
+. $script:ExporterScriptPath
+
+$requiredExporterFunctions = @(
+    'Read-ExportProfile',
+    'Connect-SqlDatabase',
+    'Get-DatabaseDependencies',
+    'Export-DependenciesCsv'
+)
+
+$missingExporterFunctions = @(
+    $requiredExporterFunctions | Where-Object {
+        $null -eq (Get-Command -Name $_ -ErrorAction SilentlyContinue)
+    }
+)
+
+if ($missingExporterFunctions.Count -gt 0) {
+    throw ("Required exporter functions were not loaded: {0}" -f ($missingExporterFunctions -join ', '))
+}
 
 function Write-TestStatus {
     [CmdletBinding()]
@@ -126,15 +151,6 @@ function Invoke-TestStep {
 Write-TestStatus -Status INFO -Message 'Starting dependency model regression test.'
 
 Invoke-TestStep -Name 'Setup Dependency Test Context' -ScriptBlock {
-    $script:ProjectRoot = Split-Path -Parent $PSScriptRoot
-    $script:ExporterScriptPath = Join-Path $script:ProjectRoot 'Export-SqlDatabaseDefinition.ps1'
-
-    Assert-Condition `
-        -Condition (Test-Path -LiteralPath $script:ExporterScriptPath -PathType Leaf) `
-        -Message "Exporter script was not found: $script:ExporterScriptPath"
-
-    . $script:ExporterScriptPath
-
     $script:ResolvedOutputFolder = [System.IO.Path]::GetFullPath($OutputFolder.Trim())
 
     Assert-Condition `
