@@ -2812,6 +2812,334 @@ function Test-ExportDependencies {
         DependencyDetails = @($dependencyDetails)
     }
 }
+
+function Get-DatabaseDependencies {
+    <#
+    .SYNOPSIS
+        Retrieves SQL object dependency metadata for the connected database.
+
+    .DESCRIPTION
+        Queries sys.sql_expression_dependencies and related catalog views to produce
+        standardized dependency records for in-memory processing.
+
+    .PARAMETER Connection
+        Connection result returned by Connect-SqlDatabase.
+
+    .OUTPUTS
+        System.Object[]
+    #>
+    [CmdletBinding()]
+    [OutputType([System.Object[]])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Connection
+    )
+
+    try {
+        if ($null -eq $Connection) {
+            throw [System.InvalidOperationException]::new('Connection cannot be null.')
+        }
+
+        $requiredConnectionProperties = @('Connected', 'DatabaseObject', 'DatabaseName', 'ServerName')
+        foreach ($propertyName in $requiredConnectionProperties) {
+            if ($null -eq $Connection.PSObject.Properties[$propertyName]) {
+                throw [System.InvalidOperationException]::new(("Connection is missing required property: {0}" -f $propertyName))
+            }
+        }
+
+        if (-not [bool]$Connection.Connected) {
+            throw [System.InvalidOperationException]::new('Connection.Connected must be true.')
+        }
+
+        if ($null -eq $Connection.DatabaseObject) {
+            throw [System.InvalidOperationException]::new('Connection.DatabaseObject cannot be null.')
+        }
+
+        $databaseName = [string]$Connection.DatabaseName
+        if ([string]::IsNullOrWhiteSpace($databaseName)) {
+            throw [System.InvalidOperationException]::new('Connection.DatabaseName cannot be null, empty, or whitespace.')
+        }
+
+        $serverName = [string]$Connection.ServerName
+        if ([string]::IsNullOrWhiteSpace($serverName)) {
+            throw [System.InvalidOperationException]::new('Connection.ServerName cannot be null, empty, or whitespace.')
+        }
+
+        $serverObject = $null
+        if ($null -ne $Connection.PSObject.Properties['ServerObject'] -and $null -ne $Connection.ServerObject) {
+            $serverObject = $Connection.ServerObject
+        }
+        elseif ($null -ne $Connection.DatabaseObject.PSObject.Properties['Parent']) {
+            $serverObject = $Connection.DatabaseObject.Parent
+        }
+
+        if ($null -eq $serverObject) {
+            throw [System.InvalidOperationException]::new('Connection does not contain a usable SQL Server object for dependency queries.')
+        }
+
+        if ($null -eq $serverObject.PSObject.Properties['ConnectionContext'] -or $null -eq $serverObject.ConnectionContext) {
+            throw [System.InvalidOperationException]::new('SQL Server connection context is unavailable for dependency queries.')
+        }
+
+        Write-ExporterLog -Level Information -Message 'Starting dependency query'
+        Write-ExporterLog -Level Information -Message ("Database name: {0}" -f $databaseName)
+
+        $dependencyQuery = @"
+SELECT
+    d.referencing_id AS ReferencingId,
+    d.referenced_id AS ReferencedId,
+    d.referencing_class AS ReferencingClass,
+    d.referenced_class AS ReferencedClass,
+    rs.name AS ReferencingSchema,
+    ro.name AS ReferencingObject,
+    ro.type_desc AS ReferencingObjectTypeRaw,
+    d.referenced_server_name AS ReferencedServer,
+    d.referenced_database_name AS ReferencedDatabase,
+    d.referenced_schema_name AS ReferencedSchema,
+    d.referenced_entity_name AS ReferencedObject,
+    rso.type_desc AS ReferencedObjectTypeRaw,
+    rss.name AS ReferencedLocalSchema,
+    rso.name AS ReferencedLocalObject,
+    d.is_schema_bound_reference AS IsSchemaBound,
+    d.is_caller_dependent AS IsCallerDependent,
+    d.is_ambiguous AS IsAmbiguous
+FROM sys.sql_expression_dependencies AS d
+INNER JOIN sys.objects AS ro
+    ON d.referencing_id = ro.object_id
+INNER JOIN sys.schemas AS rs
+    ON ro.schema_id = rs.schema_id
+LEFT JOIN sys.objects AS rso
+    ON d.referenced_id = rso.object_id
+LEFT JOIN sys.schemas AS rss
+    ON rso.schema_id = rss.schema_id
+ORDER BY
+    rs.name,
+    ro.name,
+    d.referenced_database_name,
+    d.referenced_schema_name,
+    d.referenced_entity_name;
+"@
+
+        $escapeSqlIdentifier = {
+            param(
+                [Parameter(Mandatory = $true)]
+                [string]$Value
+            )
+
+            return ('[{0}]' -f $Value.Replace(']', ']]'))
+        }
+
+        $executeQuery = "USE {0};{1}{2}" -f (& $escapeSqlIdentifier -Value $databaseName), [Environment]::NewLine, $dependencyQuery
+
+        $queryResult = $null
+        try {
+            $queryResult = $serverObject.ConnectionContext.ExecuteWithResults($executeQuery)
+        }
+        catch {
+            throw [System.InvalidOperationException]::new(("Dependency query failed for database [{0}] on server [{1}]." -f $databaseName, $serverName))
+        }
+
+        $rows = @()
+        if ($null -ne $queryResult -and $null -ne $queryResult.Tables -and $queryResult.Tables.Count -gt 0) {
+            $rows = @($queryResult.Tables[0].Rows)
+        }
+
+        $getRowValue = {
+            param(
+                [Parameter(Mandatory = $true)]
+                [object]$Row,
+
+                [Parameter(Mandatory = $true)]
+                [string]$ColumnName
+            )
+
+            if ($null -eq $Row -or $null -eq $Row.Table -or -not $Row.Table.Columns.Contains($ColumnName)) {
+                return $null
+            }
+
+            $value = $Row[$ColumnName]
+            if ($null -eq $value -or $value -is [System.DBNull]) {
+                return $null
+            }
+
+            return $value
+        }
+
+        $toStringOrEmpty = {
+            param(
+                [Parameter(Mandatory = $false)]
+                [object]$Value
+            )
+
+            if ($null -eq $Value) {
+                return ''
+            }
+
+            return [string]$Value
+        }
+
+        $toNullableInt = {
+            param(
+                [Parameter(Mandatory = $false)]
+                [object]$Value
+            )
+
+            if ($null -eq $Value) {
+                return $null
+            }
+
+            try {
+                return [int]$Value
+            }
+            catch {
+                return $null
+            }
+        }
+
+        $toBoolean = {
+            param(
+                [Parameter(Mandatory = $false)]
+                [object]$Value
+            )
+
+            if ($null -eq $Value) {
+                return $false
+            }
+
+            try {
+                return [bool]$Value
+            }
+            catch {
+                return $false
+            }
+        }
+
+        $normalizeObjectType = {
+            param(
+                [Parameter(Mandatory = $false)]
+                [object]$TypeValue
+            )
+
+            $rawType = (& $toStringOrEmpty -Value $TypeValue)
+            if ([string]::IsNullOrWhiteSpace($rawType)) {
+                return 'UNKNOWN'
+            }
+
+            $rawTypeUpper = $rawType.ToUpperInvariant()
+
+            if ($rawTypeUpper -match 'SEQUENCE') {
+                return 'SEQUENCE'
+            }
+
+            if ($rawTypeUpper -match 'SYNONYM') {
+                return 'SYNONYM'
+            }
+
+            if ($rawTypeUpper -match 'TRIGGER') {
+                return 'TRIGGER'
+            }
+
+            if ($rawTypeUpper -match 'FUNCTION') {
+                return 'FUNCTION'
+            }
+
+            if ($rawTypeUpper -match 'PROCEDURE') {
+                return 'PROCEDURE'
+            }
+
+            if ($rawTypeUpper -match 'VIEW') {
+                return 'VIEW'
+            }
+
+            if ($rawTypeUpper -match 'TABLE') {
+                return 'TABLE'
+            }
+
+            return 'UNKNOWN'
+        }
+
+        $dependencyRecords = [System.Collections.Generic.List[object]]::new()
+
+        foreach ($row in $rows) {
+            $referencingId = & $toNullableInt -Value (& $getRowValue -Row $row -ColumnName 'ReferencingId')
+            $referencedId = & $toNullableInt -Value (& $getRowValue -Row $row -ColumnName 'ReferencedId')
+            $referencingClass = & $toNullableInt -Value (& $getRowValue -Row $row -ColumnName 'ReferencingClass')
+            $referencedClass = & $toNullableInt -Value (& $getRowValue -Row $row -ColumnName 'ReferencedClass')
+
+            $referencingSchema = (& $toStringOrEmpty -Value (& $getRowValue -Row $row -ColumnName 'ReferencingSchema'))
+            $referencingObject = (& $toStringOrEmpty -Value (& $getRowValue -Row $row -ColumnName 'ReferencingObject'))
+            $referencingObjectType = (& $normalizeObjectType -TypeValue (& $getRowValue -Row $row -ColumnName 'ReferencingObjectTypeRaw'))
+
+            $referencedServerRaw = (& $toStringOrEmpty -Value (& $getRowValue -Row $row -ColumnName 'ReferencedServer'))
+            $referencedDatabaseRaw = (& $toStringOrEmpty -Value (& $getRowValue -Row $row -ColumnName 'ReferencedDatabase'))
+            $referencedSchemaRaw = (& $toStringOrEmpty -Value (& $getRowValue -Row $row -ColumnName 'ReferencedSchema'))
+            $referencedObjectRaw = (& $toStringOrEmpty -Value (& $getRowValue -Row $row -ColumnName 'ReferencedObject'))
+
+            $referencedLocalSchema = (& $toStringOrEmpty -Value (& $getRowValue -Row $row -ColumnName 'ReferencedLocalSchema'))
+            $referencedLocalObject = (& $toStringOrEmpty -Value (& $getRowValue -Row $row -ColumnName 'ReferencedLocalObject'))
+
+            $resolvedReferencedSchema = $referencedSchemaRaw
+            if ([string]::IsNullOrWhiteSpace($resolvedReferencedSchema)) {
+                $resolvedReferencedSchema = $referencedLocalSchema
+            }
+
+            $resolvedReferencedObject = $referencedObjectRaw
+            if ([string]::IsNullOrWhiteSpace($resolvedReferencedObject)) {
+                $resolvedReferencedObject = $referencedLocalObject
+            }
+
+            $referencedObjectTypeRaw = & $getRowValue -Row $row -ColumnName 'ReferencedObjectTypeRaw'
+            $referencedObjectType = (& $normalizeObjectType -TypeValue $referencedObjectTypeRaw)
+
+            $isSchemaBound = (& $toBoolean -Value (& $getRowValue -Row $row -ColumnName 'IsSchemaBound'))
+            $isCallerDependent = (& $toBoolean -Value (& $getRowValue -Row $row -ColumnName 'IsCallerDependent'))
+            $isAmbiguous = (& $toBoolean -Value (& $getRowValue -Row $row -ColumnName 'IsAmbiguous'))
+
+            $isCrossServer = -not [string]::IsNullOrWhiteSpace($referencedServerRaw)
+            $isCrossDatabase = (-not [string]::IsNullOrWhiteSpace($referencedDatabaseRaw)) -and ($referencedDatabaseRaw -ine $databaseName)
+            $isExternalReference = $isCrossServer -or $isCrossDatabase
+
+            $dependencyRecords.Add([PSCustomObject]@{
+                ReferencingDatabase = $databaseName
+                ReferencingSchema = $referencingSchema
+                ReferencingObject = $referencingObject
+                ReferencingObjectType = $referencingObjectType
+
+                ReferencedServer = $referencedServerRaw
+                ReferencedDatabase = $referencedDatabaseRaw
+                ReferencedSchema = $resolvedReferencedSchema
+                ReferencedObject = $resolvedReferencedObject
+                ReferencedObjectType = $referencedObjectType
+
+                IsSchemaBound = $isSchemaBound
+                IsCallerDependent = $isCallerDependent
+                IsAmbiguous = $isAmbiguous
+
+                IsCrossDatabase = $isCrossDatabase
+                IsCrossServer = $isCrossServer
+                IsExternalReference = $isExternalReference
+
+                ReferencingId = $referencingId
+                ReferencedId = $referencedId
+                ReferencingClass = $referencingClass
+                ReferencedClass = $referencedClass
+            })
+        }
+
+        $sortedDependencies = @(
+            $dependencyRecords |
+                Sort-Object -Property ReferencingSchema, ReferencingObject, ReferencedDatabase, ReferencedSchema, ReferencedObject
+        )
+
+        Write-ExporterLog -Level Information -Message ("Number of dependencies found: {0}" -f $sortedDependencies.Count)
+        Write-ExporterLog -Level Information -Message 'Dependency query completed'
+
+        return @($sortedDependencies)
+    }
+    catch {
+        throw [System.InvalidOperationException]::new(("Failed to query dependency metadata. {0}" -f $_.Exception.Message))
+    }
+}
 #endregion
 
 #region Main

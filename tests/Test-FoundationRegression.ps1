@@ -220,7 +220,7 @@ Invoke-TestStep -Name 'export.log' -ScriptBlock {
         -Condition (Test-Path -LiteralPath $logPath -PathType Leaf) `
         -Message "export.log was not created: $logPath"
 
-    Write-Log -Level Information -Message 'Regression test log entry.'
+    Write-ExporterLog -Level Information -Message 'Regression test log entry.'
 }
 
 Invoke-TestStep -Name 'exportinfo.json' -ScriptBlock {
@@ -915,6 +915,63 @@ Invoke-TestStep -Name 'Export-Sequences' -ScriptBlock {
     }
     else {
         Write-TestStatus -Status WARN -Message 'Export-Sequences found no user sequences to export.'
+    }
+}
+
+Invoke-TestStep -Name 'Get-DatabaseDependencies' -ScriptBlock {
+    if (-not (Get-Command -Name Get-DatabaseDependencies -ErrorAction SilentlyContinue)) {
+        Skip-TestStep -Message 'Get-DatabaseDependencies function was not found.'
+    }
+
+    if ($null -eq $script:connection) {
+        Skip-TestStep -Message 'Connect-SqlDatabase did not produce a valid connection object.'
+    }
+
+    $dependencies = Get-DatabaseDependencies -Connection $script:connection
+
+    Assert-Condition `
+        -Condition ($null -ne $dependencies) `
+        -Message 'Get-DatabaseDependencies returned null.'
+
+    $dependencyArray = @($dependencies)
+
+    Assert-Condition `
+        -Condition ($dependencyArray -is [System.Array]) `
+        -Message 'Get-DatabaseDependencies result cannot be treated as an array.'
+
+    if ($dependencyArray.Count -gt 0) {
+        $firstDependency = $dependencyArray[0]
+
+        $requiredProperties = @(
+            'ReferencingDatabase',
+            'ReferencingSchema',
+            'ReferencingObject',
+            'ReferencingObjectType',
+            'ReferencedServer',
+            'ReferencedDatabase',
+            'ReferencedSchema',
+            'ReferencedObject',
+            'ReferencedObjectType',
+            'IsSchemaBound',
+            'IsCallerDependent',
+            'IsAmbiguous',
+            'IsCrossDatabase',
+            'IsCrossServer',
+            'IsExternalReference',
+            'ReferencingId',
+            'ReferencedId',
+            'ReferencingClass',
+            'ReferencedClass'
+        )
+
+        foreach ($propertyName in $requiredProperties) {
+            Assert-Condition `
+                -Condition ($null -ne $firstDependency.PSObject.Properties[$propertyName]) `
+                -Message ("Dependency object is missing required property: {0}" -f $propertyName)
+        }
+    }
+    else {
+        Write-TestStatus -Status WARN -Message 'Get-DatabaseDependencies returned no dependency records.'
     }
 }
 
