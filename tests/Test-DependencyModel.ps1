@@ -56,6 +56,13 @@ $script:ResolvedOutputFolder = $null
 $script:DependenciesLoaded = $false
 $script:ProjectRoot = Split-Path -Parent $PSScriptRoot
 $script:ExporterScriptPath = Join-Path $script:ProjectRoot 'Export-SqlDatabaseDefinition.ps1'
+$testFrameworkPath = Join-Path $PSScriptRoot 'TestFramework.ps1'
+
+if (-not (Test-Path -LiteralPath $testFrameworkPath -PathType Leaf)) {
+    throw "Test framework was not found: $testFrameworkPath"
+}
+
+. $testFrameworkPath
 
 if (-not (Test-Path -LiteralPath $script:ExporterScriptPath -PathType Leaf)) {
     throw "Exporter script was not found: $script:ExporterScriptPath"
@@ -80,74 +87,6 @@ $missingExporterFunctions = @(
 
 if ($missingExporterFunctions.Count -gt 0) {
     throw ("Required exporter functions were not loaded: {0}" -f ($missingExporterFunctions -join ', '))
-}
-
-function Write-TestStatus {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)]
-        [ValidateSet('PASS', 'FAIL', 'INFO', 'WARN', 'SKIP')]
-        [string]$Status,
-
-        [Parameter(Mandatory = $true)]
-        [string]$Message
-    )
-
-    Write-Host ("[{0}] {1}" -f $Status, $Message)
-}
-
-function Assert-Condition {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)]
-        [bool]$Condition,
-
-        [Parameter(Mandatory = $true)]
-        [string]$Message
-    )
-
-    if (-not $Condition) {
-        throw $Message
-    }
-}
-
-function Skip-TestStep {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Message
-    )
-
-    throw [System.OperationCanceledException]::new($Message)
-}
-
-function Invoke-TestStep {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Name,
-
-        [Parameter(Mandatory = $true)]
-        [scriptblock]$ScriptBlock
-    )
- 
-    Write-TestStatus -Status INFO -Message ("Running: {0}" -f $Name)
-
-    try {
-        & $ScriptBlock
-        $script:TestsPassed++
-        Write-TestStatus -Status PASS -Message $Name
-    }
-    catch [System.OperationCanceledException] {
-        $script:TestsSkipped++
-        Write-TestStatus -Status SKIP -Message $Name
-        Write-TestStatus -Status SKIP -Message $_.Exception.Message
-    }
-    catch {
-        $script:TestsFailed++
-        Write-TestStatus -Status FAIL -Message $Name
-        Write-TestStatus -Status FAIL -Message $_.Exception.Message
-    }
 }
 
 Write-TestStatus -Status INFO -Message 'Starting dependency model regression test.'

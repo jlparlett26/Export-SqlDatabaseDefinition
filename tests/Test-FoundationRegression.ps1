@@ -33,36 +33,6 @@ Write-Host '========================================================='
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-function Write-TestStatus {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)]
-        [ValidateSet('PASS', 'FAIL', 'INFO', 'WARN', 'SKIP')]
-        [string]$Status,
-
-        [Parameter(Mandatory = $true)]
-        [string]$Message
-    )
-
-    $prefix = "[{0}]" -f $Status
-    Write-Host "$prefix $Message"
-}
-
-function Assert-Condition {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)]
-        [bool]$Condition,
-
-        [Parameter(Mandatory = $true)]
-        [string]$Message
-    )
-
-    if (-not $Condition) {
-        throw $Message
-    }
-}
-
 $script:testsPassed = 0
 $script:testsFailed = 0
 $script:testsSkipped = 0
@@ -74,44 +44,12 @@ $script:connection = $null
 $script:projectRoot = $null
 $script:scriptPath = $null
 
-function Skip-TestStep {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Message
-    )
-
-    throw [System.OperationCanceledException]::new($Message)
+$testFrameworkPath = Join-Path $PSScriptRoot 'TestFramework.ps1'
+if (-not (Test-Path -LiteralPath $testFrameworkPath -PathType Leaf)) {
+    throw "Test framework was not found: $testFrameworkPath"
 }
 
-function Invoke-TestStep {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Name,
-
-        [Parameter(Mandatory = $true)]
-        [ScriptBlock]$ScriptBlock
-    )
-
-    Write-TestStatus -Status INFO -Message ("Running: {0}" -f $Name)
-
-    try {
-        & $ScriptBlock
-        $script:testsPassed++
-        Write-TestStatus -Status PASS -Message $Name
-    }
-    catch [System.OperationCanceledException] {
-        $script:testsSkipped++
-        Write-TestStatus -Status SKIP -Message $Name
-        Write-TestStatus -Status SKIP -Message $_.Exception.Message
-    }
-    catch {
-        $script:testsFailed++
-        Write-TestStatus -Status FAIL -Message $Name
-        Write-TestStatus -Status FAIL -Message $_.Exception.Message
-    }
-}
+. $testFrameworkPath
 
 Write-TestStatus -Status INFO -Message 'Starting current workflow regression test.'
 
