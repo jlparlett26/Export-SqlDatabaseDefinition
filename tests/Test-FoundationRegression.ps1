@@ -22,6 +22,14 @@ param(
     [string]$OutputFolder
 )
 
+Clear-Host
+
+Write-Host ''
+Write-Host '========================================================='
+Write-Host 'Test-FoundationRegression'
+Write-Host ("Started: {0}" -f (Get-Date))
+Write-Host '========================================================='
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
@@ -105,7 +113,6 @@ function Invoke-TestStep {
     }
 }
 
-Clear-Host
 Write-TestStatus -Status INFO -Message 'Starting current workflow regression test.'
 
 $script:projectRoot = Split-Path -Parent $PSScriptRoot

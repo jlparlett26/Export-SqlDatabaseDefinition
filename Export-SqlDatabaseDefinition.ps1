@@ -3058,6 +3058,40 @@ ORDER BY
             return 'UNKNOWN'
         }
 
+        $buildFullName = {
+            param(
+                [Parameter(Mandatory = $false)]
+                [string]$SchemaName,
+
+                [Parameter(Mandatory = $false)]
+                [string]$ObjectName
+            )
+
+            $schemaValue = ''
+            if ($null -ne $SchemaName) {
+                $schemaValue = $SchemaName.Trim()
+            }
+
+            $objectValue = ''
+            if ($null -ne $ObjectName) {
+                $objectValue = $ObjectName.Trim()
+            }
+
+            if (-not [string]::IsNullOrWhiteSpace($schemaValue) -and -not [string]::IsNullOrWhiteSpace($objectValue)) {
+                return ('{0}.{1}' -f $schemaValue, $objectValue)
+            }
+
+            if (-not [string]::IsNullOrWhiteSpace($objectValue)) {
+                return $objectValue
+            }
+
+            if (-not [string]::IsNullOrWhiteSpace($schemaValue)) {
+                return $schemaValue
+            }
+
+            return ''
+        }
+
         $dependencyRecords = [System.Collections.Generic.List[object]]::new()
 
         foreach ($row in $rows) {
@@ -3066,18 +3100,18 @@ ORDER BY
             $referencingClass = & $toNullableInt -Value (& $getRowValue -Row $row -ColumnName 'ReferencingClass')
             $referencedClass = & $toNullableInt -Value (& $getRowValue -Row $row -ColumnName 'ReferencedClass')
 
-            $referencingSchema = (& $toStringOrEmpty -Value (& $getRowValue -Row $row -ColumnName 'ReferencingSchema'))
-            $referencingObject = (& $toStringOrEmpty -Value (& $getRowValue -Row $row -ColumnName 'ReferencingObject'))
-            $referencingFullName = ('{0}.{1}' -f $referencingSchema, $referencingObject)
+            $referencingSchema = (& $toStringOrEmpty -Value (& $getRowValue -Row $row -ColumnName 'ReferencingSchema')).Trim()
+            $referencingObject = (& $toStringOrEmpty -Value (& $getRowValue -Row $row -ColumnName 'ReferencingObject')).Trim()
+            $referencingFullName = (& $buildFullName -SchemaName $referencingSchema -ObjectName $referencingObject)
             $referencingObjectType = (& $normalizeObjectType -TypeValue (& $getRowValue -Row $row -ColumnName 'ReferencingObjectTypeRaw'))
 
-            $referencedServerRaw = (& $toStringOrEmpty -Value (& $getRowValue -Row $row -ColumnName 'ReferencedServer'))
-            $referencedDatabaseRaw = (& $toStringOrEmpty -Value (& $getRowValue -Row $row -ColumnName 'ReferencedDatabase'))
-            $referencedSchemaRaw = (& $toStringOrEmpty -Value (& $getRowValue -Row $row -ColumnName 'ReferencedSchema'))
-            $referencedObjectRaw = (& $toStringOrEmpty -Value (& $getRowValue -Row $row -ColumnName 'ReferencedObject'))
+            $referencedServerRaw = (& $toStringOrEmpty -Value (& $getRowValue -Row $row -ColumnName 'ReferencedServer')).Trim()
+            $referencedDatabaseRaw = (& $toStringOrEmpty -Value (& $getRowValue -Row $row -ColumnName 'ReferencedDatabase')).Trim()
+            $referencedSchemaRaw = (& $toStringOrEmpty -Value (& $getRowValue -Row $row -ColumnName 'ReferencedSchema')).Trim()
+            $referencedObjectRaw = (& $toStringOrEmpty -Value (& $getRowValue -Row $row -ColumnName 'ReferencedObject')).Trim()
 
-            $referencedLocalSchema = (& $toStringOrEmpty -Value (& $getRowValue -Row $row -ColumnName 'ReferencedLocalSchema'))
-            $referencedLocalObject = (& $toStringOrEmpty -Value (& $getRowValue -Row $row -ColumnName 'ReferencedLocalObject'))
+            $referencedLocalSchema = (& $toStringOrEmpty -Value (& $getRowValue -Row $row -ColumnName 'ReferencedLocalSchema')).Trim()
+            $referencedLocalObject = (& $toStringOrEmpty -Value (& $getRowValue -Row $row -ColumnName 'ReferencedLocalObject')).Trim()
 
             $resolvedReferencedSchema = $referencedSchemaRaw
             if ([string]::IsNullOrWhiteSpace($resolvedReferencedSchema)) {
@@ -3089,10 +3123,7 @@ ORDER BY
                 $resolvedReferencedObject = $referencedLocalObject
             }
 
-            $referencedFullName = $resolvedReferencedObject
-            if (-not [string]::IsNullOrWhiteSpace($resolvedReferencedSchema) -and -not [string]::IsNullOrWhiteSpace($resolvedReferencedObject)) {
-                $referencedFullName = ('{0}.{1}' -f $resolvedReferencedSchema, $resolvedReferencedObject)
-            }
+            $referencedFullName = (& $buildFullName -SchemaName $resolvedReferencedSchema -ObjectName $resolvedReferencedObject)
 
             $referencedObjectTypeRaw = & $getRowValue -Row $row -ColumnName 'ReferencedObjectTypeRaw'
             $referencedObjectType = (& $normalizeObjectType -TypeValue $referencedObjectTypeRaw)
@@ -3139,13 +3170,178 @@ ORDER BY
                 Sort-Object -Property ReferencingSchema, ReferencingObject, ReferencedDatabase, ReferencedSchema, ReferencedObject
         )
 
-        Write-ExporterLog -Level Information -Message ("Number of dependencies found: {0}" -f $sortedDependencies.Count)
+        $finalDependencies = @(
+            $sortedDependencies |
+                ForEach-Object {
+                    $referencingSchemaValue = (& $toStringOrEmpty -Value $_.ReferencingSchema).Trim()
+                    $referencingObjectValue = (& $toStringOrEmpty -Value $_.ReferencingObject).Trim()
+                    $referencingFullNameValue = (& $buildFullName -SchemaName $referencingSchemaValue -ObjectName $referencingObjectValue)
+
+                    $referencedSchemaValue = (& $toStringOrEmpty -Value $_.ReferencedSchema).Trim()
+                    $referencedObjectValue = (& $toStringOrEmpty -Value $_.ReferencedObject).Trim()
+                    $referencedFullNameValue = (& $buildFullName -SchemaName $referencedSchemaValue -ObjectName $referencedObjectValue)
+
+                    [PSCustomObject]@{
+                        ReferencingDatabase = $_.ReferencingDatabase
+                        ReferencingSchema = $referencingSchemaValue
+                        ReferencingObject = $referencingObjectValue
+                        ReferencingFullName = $referencingFullNameValue
+                        ReferencingObjectType = $_.ReferencingObjectType
+
+                        ReferencedServer = $_.ReferencedServer
+                        ReferencedDatabase = $_.ReferencedDatabase
+                        ReferencedSchema = $referencedSchemaValue
+                        ReferencedObject = $referencedObjectValue
+                        ReferencedFullName = $referencedFullNameValue
+                        ReferencedObjectType = $_.ReferencedObjectType
+
+                        IsSchemaBound = $_.IsSchemaBound
+                        IsCallerDependent = $_.IsCallerDependent
+                        IsAmbiguous = $_.IsAmbiguous
+
+                        IsCrossDatabase = $_.IsCrossDatabase
+                        IsCrossServer = $_.IsCrossServer
+                        IsExternalReference = $_.IsExternalReference
+
+                        ReferencingId = $_.ReferencingId
+                        ReferencedId = $_.ReferencedId
+                        ReferencingClass = $_.ReferencingClass
+                        ReferencedClass = $_.ReferencedClass
+                    }
+                }
+        )
+
+        Write-ExporterLog -Level Information -Message ("Number of dependencies found: {0}" -f $finalDependencies.Count)
         Write-ExporterLog -Level Information -Message 'Dependency query completed'
 
-        return @($sortedDependencies)
+        return @($finalDependencies)
     }
     catch {
         throw [System.InvalidOperationException]::new(("Failed to query dependency metadata. {0}" -f $_.Exception.Message))
+    }
+}
+
+function Export-DependenciesCsv {
+    <#
+    .SYNOPSIS
+        Exports dependency records to Dependencies\dependencies.csv.
+
+    .DESCRIPTION
+        Writes dependency records returned by Get-DatabaseDependencies to a deterministic
+        CSV file with fixed column order for downstream analysis and spreadsheet use.
+
+    .PARAMETER Dependencies
+        Dependency records to export.
+
+    .PARAMETER OutputFolder
+        Target export folder that will contain the Dependencies subfolder.
+
+    .OUTPUTS
+        System.Management.Automation.PSCustomObject
+    #>
+    [CmdletBinding()]
+    [OutputType([System.Management.Automation.PSCustomObject])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [object[]]$Dependencies,
+
+        [Parameter(Mandatory = $true)]
+        [string]$OutputFolder
+    )
+
+    try {
+        if ($null -eq $Dependencies) {
+            throw [System.InvalidOperationException]::new('Dependencies cannot be null.')
+        }
+
+        if ([string]::IsNullOrWhiteSpace($OutputFolder)) {
+            throw [System.InvalidOperationException]::new('OutputFolder cannot be null, empty, or whitespace.')
+        }
+
+        $resolvedOutputFolder = [System.IO.Path]::GetFullPath($OutputFolder.Trim())
+        if (-not (Test-Path -LiteralPath $resolvedOutputFolder -PathType Container)) {
+            throw [System.InvalidOperationException]::new(("OutputFolder does not exist: {0}" -f $resolvedOutputFolder))
+        }
+
+        Write-ExporterLog -Level Information -Message 'Starting dependencies CSV export'
+
+        $dependencyArray = @($Dependencies)
+        Write-ExporterLog -Level Information -Message ("Dependency count: {0}" -f $dependencyArray.Count)
+
+        $dependenciesFolder = [System.IO.Path]::Combine($resolvedOutputFolder, 'Dependencies')
+        if (-not (Test-Path -LiteralPath $dependenciesFolder -PathType Container)) {
+            New-Item -ItemType Directory -Path $dependenciesFolder -Force | Out-Null
+        }
+
+        $csvPath = [System.IO.Path]::Combine($dependenciesFolder, 'dependencies.csv')
+        Write-ExporterLog -Level Information -Message ("CSV path: {0}" -f $csvPath)
+
+        $columnOrder = @(
+            'ReferencingFullName',
+            'ReferencingObjectType',
+            'ReferencedFullName',
+            'ReferencedObjectType',
+            'ReferencingDatabase',
+            'ReferencedServer',
+            'ReferencedDatabase',
+            'IsCrossDatabase',
+            'IsCrossServer',
+            'IsExternalReference',
+            'IsSchemaBound',
+            'IsCallerDependent',
+            'IsAmbiguous',
+            'ReferencingId',
+            'ReferencedId'
+        )
+
+        $sortedDependencies = @(
+            $dependencyArray |
+                Sort-Object -Property ReferencingFullName, ReferencedFullName |
+                Select-Object -Property $columnOrder
+        )
+
+        if ($sortedDependencies.Count -gt 0) {
+            $sortedDependencies |
+                Export-Csv -LiteralPath $csvPath -NoTypeInformation -Encoding utf8
+        }
+        else {
+            $emptyTemplate = [PSCustomObject]@{
+                ReferencingFullName = ''
+                ReferencingObjectType = ''
+                ReferencedFullName = ''
+                ReferencedObjectType = ''
+                ReferencingDatabase = ''
+                ReferencedServer = ''
+                ReferencedDatabase = ''
+                IsCrossDatabase = ''
+                IsCrossServer = ''
+                IsExternalReference = ''
+                IsSchemaBound = ''
+                IsCallerDependent = ''
+                IsAmbiguous = ''
+                ReferencingId = ''
+                ReferencedId = ''
+            }
+
+            @($emptyTemplate) |
+                Select-Object -Property $columnOrder |
+                Export-Csv -LiteralPath $csvPath -NoTypeInformation -Encoding utf8
+
+            $csvLines = Get-Content -LiteralPath $csvPath
+            if ($csvLines.Count -gt 0) {
+                Set-Content -LiteralPath $csvPath -Value $csvLines[0] -Encoding utf8
+            }
+        }
+
+        Write-ExporterLog -Level Information -Message 'Dependencies CSV export completed'
+
+        return [PSCustomObject]@{
+            DependencyCount = $sortedDependencies.Count
+            CsvPath = $csvPath
+        }
+    }
+    catch {
+        throw [System.InvalidOperationException]::new(("Failed to export dependencies CSV. {0}" -f $_.Exception.Message))
     }
 }
 #endregion

@@ -39,6 +39,25 @@ All PowerShell code should:
 
 ---
 
+# Regression Tests
+
+After Sprint 3 is complete, I'd like a shared helper module:
+tests\TestFramework.ps1
+containing:
+Write-TestStatus
+Assert-Condition
+Invoke-TestStep
+
+so both:
+Test-FoundationRegression.ps1T
+Test-DependencyModel.ps1
+
+behave identically and report:
+Test-FoundationRegression.ps1
+Test-DependencyModel.ps1
+
+---
+
 # Current Development State
 
 Current Sprint:
@@ -132,7 +151,6 @@ SqlServer
 
 Graphviz
     winget install Graphviz.Graphviz
-
 
 ## Development Dependencies
 
