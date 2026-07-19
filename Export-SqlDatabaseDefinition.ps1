@@ -3243,6 +3243,7 @@ function Export-DependenciesCsv {
     [OutputType([System.Management.Automation.PSCustomObject])]
     param(
         [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
         [object[]]$Dependencies,
 
         [Parameter(Mandatory = $true)]
@@ -3342,6 +3343,284 @@ function Export-DependenciesCsv {
     }
     catch {
         throw [System.InvalidOperationException]::new(("Failed to export dependencies CSV. {0}" -f $_.Exception.Message))
+    }
+}
+
+function Export-DependenciesJson {
+    <#
+    .SYNOPSIS
+        Exports dependency records to Dependencies\dependencies.json.
+
+    .DESCRIPTION
+        Writes dependency records returned by Get-DatabaseDependencies to a deterministic
+        JSON array for downstream dependency processing.
+
+    .PARAMETER Dependencies
+        Dependency records to export.
+
+    .PARAMETER OutputFolder
+        Target export folder that will contain the Dependencies subfolder.
+
+    .OUTPUTS
+        System.Management.Automation.PSCustomObject
+    #>
+    [CmdletBinding()]
+    [OutputType([System.Management.Automation.PSCustomObject])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [object[]]$Dependencies,
+
+        [Parameter(Mandatory = $true)]
+        [string]$OutputFolder
+    )
+
+    try {
+        if ($null -eq $Dependencies) {
+            throw [System.InvalidOperationException]::new('Dependencies cannot be null.')
+        }
+
+        if ([string]::IsNullOrWhiteSpace($OutputFolder)) {
+            throw [System.InvalidOperationException]::new('OutputFolder cannot be null, empty, or whitespace.')
+        }
+
+        $resolvedOutputFolder = [System.IO.Path]::GetFullPath($OutputFolder.Trim())
+        if (-not (Test-Path -LiteralPath $resolvedOutputFolder -PathType Container)) {
+            throw [System.InvalidOperationException]::new(("OutputFolder does not exist: {0}" -f $resolvedOutputFolder))
+        }
+
+        Write-ExporterLog -Level Information -Message 'Starting dependencies JSON export'
+
+        $dependencyArray = @($Dependencies)
+        Write-ExporterLog -Level Information -Message ("Dependency count: {0}" -f $dependencyArray.Count)
+
+        $dependenciesFolder = [System.IO.Path]::Combine($resolvedOutputFolder, 'Dependencies')
+        if (-not (Test-Path -LiteralPath $dependenciesFolder -PathType Container)) {
+            New-Item -ItemType Directory -Path $dependenciesFolder -Force | Out-Null
+        }
+
+        $jsonPath = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($dependenciesFolder, 'dependencies.json'))
+        Write-ExporterLog -Level Information -Message ("JSON path: {0}" -f $jsonPath)
+
+        if ($dependencyArray.Count -eq 0) {
+            [System.IO.File]::WriteAllText($jsonPath, '[]', [System.Text.UTF8Encoding]::new($false))
+        }
+        else {
+            $sortedDependencies = @(
+                $dependencyArray |
+                    Sort-Object -Property ReferencingFullName, ReferencedFullName
+            )
+
+            $jsonContent = $sortedDependencies | ConvertTo-Json -Depth 10 -AsArray
+            [System.IO.File]::WriteAllText($jsonPath, $jsonContent, [System.Text.UTF8Encoding]::new($false))
+        }
+
+        Write-ExporterLog -Level Information -Message 'Dependencies JSON export completed'
+
+        return [PSCustomObject]@{
+            DependencyCount = $dependencyArray.Count
+            JsonPath = $jsonPath
+        }
+    }
+    catch {
+        throw [System.InvalidOperationException]::new(("Failed to export dependencies JSON. {0}" -f $_.Exception.Message))
+    }
+}
+
+function Export-DependencyWarnings {
+    <#
+    .SYNOPSIS
+        Exports dependency warning details to Dependencies\dependency-warnings.md.
+
+    .DESCRIPTION
+        Creates a markdown warning report from dependency records returned by
+        Get-DatabaseDependencies for migration and review workflows.
+
+    .PARAMETER Dependencies
+        Dependency records to analyze for warning conditions.
+
+    .PARAMETER OutputFolder
+        Target export folder that will contain the Dependencies subfolder.
+
+    .OUTPUTS
+        System.Management.Automation.PSCustomObject
+    #>
+    [CmdletBinding()]
+    [OutputType([System.Management.Automation.PSCustomObject])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [object[]]$Dependencies,
+
+        [Parameter(Mandatory = $true)]
+        [string]$OutputFolder
+    )
+
+    try {
+        if ($null -eq $Dependencies) {
+            throw [System.InvalidOperationException]::new('Dependencies cannot be null.')
+        }
+
+        if ([string]::IsNullOrWhiteSpace($OutputFolder)) {
+            throw [System.InvalidOperationException]::new('OutputFolder cannot be null, empty, or whitespace.')
+        }
+
+        $resolvedOutputFolder = [System.IO.Path]::GetFullPath($OutputFolder.Trim())
+        if (-not (Test-Path -LiteralPath $resolvedOutputFolder -PathType Container)) {
+            throw [System.InvalidOperationException]::new(("OutputFolder does not exist: {0}" -f $resolvedOutputFolder))
+        }
+
+        Write-ExporterLog -Level Information -Message 'Starting dependency warning report generation'
+
+        $dependencyArray = @($Dependencies)
+
+        $dependenciesFolder = [System.IO.Path]::Combine($resolvedOutputFolder, 'Dependencies')
+        if (-not (Test-Path -LiteralPath $dependenciesFolder -PathType Container)) {
+            New-Item -ItemType Directory -Path $dependenciesFolder -Force | Out-Null
+        }
+
+        $warningPath = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($dependenciesFolder, 'dependency-warnings.md'))
+
+        $sortedDependencies = @(
+            $dependencyArray |
+                Sort-Object -Property ReferencingFullName, ReferencedFullName
+        )
+
+        $crossDatabaseReferences = @(
+            $sortedDependencies | Where-Object { $_.IsCrossDatabase -eq $true }
+        )
+        $crossServerReferences = @(
+            $sortedDependencies | Where-Object { $_.IsCrossServer -eq $true }
+        )
+        $callerDependentReferences = @(
+            $sortedDependencies | Where-Object { $_.IsCallerDependent -eq $true }
+        )
+        $ambiguousReferences = @(
+            $sortedDependencies | Where-Object { $_.IsAmbiguous -eq $true }
+        )
+
+        Write-ExporterLog -Level Information -Message (
+            "Warning counts - CrossDatabase: {0}, CrossServer: {1}, CallerDependent: {2}, Ambiguous: {3}" -f
+            $crossDatabaseReferences.Count,
+            $crossServerReferences.Count,
+            $callerDependentReferences.Count,
+            $ambiguousReferences.Count
+        )
+        Write-ExporterLog -Level Information -Message ("Output path: {0}" -f $warningPath)
+
+        $lines = [System.Collections.Generic.List[string]]::new()
+
+        $addDependencySection = {
+            param(
+                [Parameter(Mandatory = $true)]
+                [string]$SectionTitle,
+
+                [Parameter(Mandatory = $true)]
+                [AllowEmptyCollection()]
+                [object[]]$SectionDependencies
+            )
+
+            $normalizedSectionTitle = @($SectionTitle)
+            $normalizedSectionDependencies = @($SectionDependencies)
+
+            $sectionDescription = @(
+                switch ($normalizedSectionTitle[0]) {
+                'Cross Database References' {
+                    @(
+                        'These dependencies reference objects located in a different database than the current database.',
+                        'Cross-database references can complicate migrations, restores, environment refreshes, and deployments because the referenced database must also exist and remain compatible.'
+                    )
+                }
+                'Cross Server References' {
+                    @(
+                        'These dependencies reference objects located on another SQL Server instance.',
+                        'Cross-server references are often among the highest-risk migration items because they depend on infrastructure outside the current database environment.'
+                    )
+                }
+                'Caller Dependent References' {
+                    @(
+                        'These dependencies are resolved at runtime based on the execution context of the caller.',
+                        'SQL Server cannot fully determine the referenced object during dependency analysis, so additional validation may be required.'
+                    )
+                }
+                'Ambiguous References' {
+                    @(
+                        'SQL Server could not resolve these dependencies with complete certainty.'
+                        'Ambiguous references should be reviewed manually to verify that the expected objects are actually being referenced.'
+                    )
+                }
+                default { @() }
+                }
+            )
+
+            $lines.Add(("## {0}" -f $normalizedSectionTitle[0]))
+            $lines.Add('')
+
+            foreach ($descriptionLine in @($sectionDescription)) {
+                $lines.Add($descriptionLine)
+            }
+
+            if (@($sectionDescription).Count -gt 0) {
+                $lines.Add('')
+            }
+
+            if ($normalizedSectionDependencies.Count -eq 0) {
+                $lines.Add('None found.')
+                $lines.Add('')
+                return
+            }
+
+            foreach ($dependency in $normalizedSectionDependencies) {
+                $referencingFullName = [string]$dependency.ReferencingFullName
+                if ([string]::IsNullOrWhiteSpace($referencingFullName)) {
+                    $referencingFullName = '[Unknown Referencing Object]'
+                }
+
+                $referencedFullName = [string]$dependency.ReferencedFullName
+                if ([string]::IsNullOrWhiteSpace($referencedFullName)) {
+                    $referencedFullName = '[Unknown Referenced Object]'
+                }
+
+                $lines.Add($referencingFullName)
+                $lines.Add('    ->')
+                $lines.Add($referencedFullName)
+                $lines.Add('')
+            }
+        }
+
+        $lines.Add('# Dependency Warning Report')
+        $lines.Add('')
+    $lines.Add('This report highlights dependency patterns that may require additional review during migrations, upgrades, environment refreshes, restores, and code reviews.')
+    $lines.Add('')
+    $lines.Add('The absence of warnings does not guarantee that all dependencies are fully understood. It only indicates that no issues matching the analyzed categories were detected.')
+    $lines.Add('')
+        $lines.Add('## Summary')
+        $lines.Add('')
+        $lines.Add(("Total Dependencies: {0}" -f $sortedDependencies.Count))
+        $lines.Add(("Cross Database References: {0}" -f $crossDatabaseReferences.Count))
+        $lines.Add(("Cross Server References: {0}" -f $crossServerReferences.Count))
+        $lines.Add(("Caller Dependent References: {0}" -f $callerDependentReferences.Count))
+        $lines.Add(("Ambiguous References: {0}" -f $ambiguousReferences.Count))
+        $lines.Add('')
+
+        & $addDependencySection -SectionTitle 'Cross Database References' -SectionDependencies $crossDatabaseReferences
+        & $addDependencySection -SectionTitle 'Cross Server References' -SectionDependencies $crossServerReferences
+        & $addDependencySection -SectionTitle 'Caller Dependent References' -SectionDependencies $callerDependentReferences
+        & $addDependencySection -SectionTitle 'Ambiguous References' -SectionDependencies $ambiguousReferences
+
+        $warningContent = [string]::Join([Environment]::NewLine, $lines)
+        [System.IO.File]::WriteAllText($warningPath, $warningContent, [System.Text.UTF8Encoding]::new($false))
+
+        Write-ExporterLog -Level Information -Message 'Dependency warning report generation completed'
+
+        return [PSCustomObject]@{
+            WarningPath = $warningPath
+            CrossDatabaseCount = $crossDatabaseReferences.Count
+            CrossServerCount = $crossServerReferences.Count
+            CallerDependentCount = $callerDependentReferences.Count
+            AmbiguousCount = $ambiguousReferences.Count
+        }
+    }
+    catch {
+        throw [System.InvalidOperationException]::new(("Failed to export dependency warnings. {0}" -f $_.Exception.Message))
     }
 }
 #endregion

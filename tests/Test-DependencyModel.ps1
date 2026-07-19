@@ -67,7 +67,9 @@ $requiredExporterFunctions = @(
     'Read-ExportProfile',
     'Connect-SqlDatabase',
     'Get-DatabaseDependencies',
-    'Export-DependenciesCsv'
+    'Export-DependenciesCsv',
+    'Export-DependenciesJson',
+    'Export-DependencyWarnings'
 )
 
 $missingExporterFunctions = @(
@@ -308,6 +310,156 @@ Invoke-TestStep -Name 'Export-DependenciesCsv' -ScriptBlock {
     }
     else {
         Write-TestStatus -Status WARN -Message 'No dependencies were returned. CSV export created header-only output.'
+    }
+}
+
+Invoke-TestStep -Name 'Export-DependenciesJson' -ScriptBlock {
+    if (-not $script:DependenciesLoaded) {
+        Skip-TestStep -Message 'Get-DatabaseDependencies did not complete successfully.'
+    }
+
+    $jsonExportResult = Export-DependenciesJson `
+        -Dependencies $script:Dependencies `
+        -OutputFolder $script:ResolvedOutputFolder
+
+    Assert-Condition `
+        -Condition ($null -ne $jsonExportResult) `
+        -Message 'Export-DependenciesJson returned null.'
+
+    Assert-Condition `
+        -Condition ($null -ne $jsonExportResult.PSObject.Properties['DependencyCount']) `
+        -Message 'Export-DependenciesJson result is missing DependencyCount.'
+
+    Assert-Condition `
+        -Condition ($null -ne $jsonExportResult.PSObject.Properties['JsonPath']) `
+        -Message 'Export-DependenciesJson result is missing JsonPath.'
+
+    $jsonPath = [string]$jsonExportResult.JsonPath
+
+    Assert-Condition `
+        -Condition (-not [string]::IsNullOrWhiteSpace($jsonPath)) `
+        -Message 'Export-DependenciesJson returned an empty JsonPath.'
+
+    Assert-Condition `
+        -Condition (Test-Path -LiteralPath $jsonPath -PathType Leaf) `
+        -Message "JSON file does not exist: $jsonPath"
+
+    $jsonRawContent = Get-Content -LiteralPath $jsonPath -Raw
+
+    Assert-Condition `
+        -Condition (-not [string]::IsNullOrWhiteSpace($jsonRawContent)) `
+        -Message "JSON file is empty: $jsonPath"
+
+    $parsedJson = $null
+    try {
+        $parsedJson = ConvertFrom-Json -InputObject $jsonRawContent
+    }
+    catch {
+        throw ("JSON parse failed for file '{0}'. {1}" -f $jsonPath, $_.Exception.Message)
+    }
+
+    Assert-Condition `
+        -Condition ($null -ne $parsedJson) `
+        -Message 'Parsed JSON result is null.'
+
+    if ($script:Dependencies.Count -gt 0) {
+        $parsedJsonArray = @($parsedJson)
+
+        Assert-Condition `
+            -Condition ($parsedJsonArray.Count -gt 0) `
+            -Message 'Parsed JSON contains zero dependency records while dependencies exist.'
+
+        $firstJsonRecord = $parsedJsonArray[0]
+
+        foreach ($propertyName in @('ReferencingFullName', 'ReferencedFullName', 'ReferencingObjectType', 'ReferencedObjectType')) {
+            Assert-Condition `
+                -Condition ($firstJsonRecord.PSObject.Properties.Name -contains $propertyName) `
+                -Message ("JSON dependency record is missing expected property: {0}" -f $propertyName)
+        }
+    }
+    else {
+        Assert-Condition `
+            -Condition ($jsonRawContent.Trim() -eq '[]') `
+            -Message 'JSON output must be an empty array [] when dependencies are zero.'
+
+        Write-TestStatus -Status WARN -Message 'No dependencies were returned. JSON export created empty-array output.'
+    }
+}
+
+Invoke-TestStep -Name 'Export-DependencyWarnings' -ScriptBlock {
+    if (-not $script:DependenciesLoaded) {
+        Skip-TestStep -Message 'Get-DatabaseDependencies did not complete successfully.'
+    }
+
+    $warningExportResult = Export-DependencyWarnings `
+        -Dependencies $script:Dependencies `
+        -OutputFolder $script:ResolvedOutputFolder
+
+    Assert-Condition `
+        -Condition ($null -ne $warningExportResult) `
+        -Message 'Export-DependencyWarnings returned null.'
+
+    foreach ($propertyName in @('WarningPath', 'CrossDatabaseCount', 'CrossServerCount', 'CallerDependentCount', 'AmbiguousCount')) {
+        Assert-Condition `
+            -Condition ($null -ne $warningExportResult.PSObject.Properties[$propertyName]) `
+            -Message ("Export-DependencyWarnings result is missing {0}." -f $propertyName)
+    }
+
+    $warningPath = [string]$warningExportResult.WarningPath
+
+    Assert-Condition `
+        -Condition (-not [string]::IsNullOrWhiteSpace($warningPath)) `
+        -Message 'Export-DependencyWarnings returned an empty WarningPath.'
+
+    Assert-Condition `
+        -Condition (Test-Path -LiteralPath $warningPath -PathType Leaf) `
+        -Message "Warning report file does not exist: $warningPath"
+
+    $warningRawContent = Get-Content -LiteralPath $warningPath -Raw
+
+    Assert-Condition `
+        -Condition (-not [string]::IsNullOrWhiteSpace($warningRawContent)) `
+        -Message "Warning report file is empty: $warningPath"
+
+    Assert-Condition `
+        -Condition ($warningRawContent -match [regex]::Escape('# Dependency Warning Report')) `
+        -Message 'Warning report is missing # Dependency Warning Report.'
+
+    Assert-Condition `
+        -Condition ($warningRawContent -match [regex]::Escape('## Summary')) `
+        -Message 'Warning report is missing ## Summary.'
+
+    Assert-Condition `
+        -Condition ($warningRawContent -match [regex]::Escape('Cross Database References')) `
+        -Message 'Warning report is missing Cross Database References section.'
+
+    Assert-Condition `
+        -Condition ($warningRawContent -match [regex]::Escape('Cross Server References')) `
+        -Message 'Warning report is missing Cross Server References section.'
+
+    Assert-Condition `
+        -Condition ($warningRawContent -match [regex]::Escape('Caller Dependent References')) `
+        -Message 'Warning report is missing Caller Dependent References section.'
+
+    Assert-Condition `
+        -Condition ($warningRawContent -match [regex]::Escape('Ambiguous References')) `
+        -Message 'Warning report is missing Ambiguous References section.'
+
+    $hasCrossDatabase = $script:Dependencies | Where-Object { $_.IsCrossDatabase -eq $true } | Select-Object -First 1
+    $hasCrossServer = $script:Dependencies | Where-Object { $_.IsCrossServer -eq $true } | Select-Object -First 1
+    $hasCallerDependent = $script:Dependencies | Where-Object { $_.IsCallerDependent -eq $true } | Select-Object -First 1
+    $hasAmbiguous = $script:Dependencies | Where-Object { $_.IsAmbiguous -eq $true } | Select-Object -First 1
+
+    if ($null -eq $hasCrossDatabase -and
+        $null -eq $hasCrossServer -and
+        $null -eq $hasCallerDependent -and
+        $null -eq $hasAmbiguous) {
+
+        Assert-Condition `
+            -Condition ($warningRawContent -match [regex]::Escape('None found')) `
+            -Message 'Warning report should include None found when no warnings exist.'
+
+        Write-TestStatus -Status WARN -Message 'No warning dependencies were found. Warning report contains None found.'
     }
 }
 

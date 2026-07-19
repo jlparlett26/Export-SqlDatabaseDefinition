@@ -39,22 +39,7 @@ All PowerShell code should:
 
 ---
 
-# Regression Tests
 
-After Sprint 3 is complete, I'd like a shared helper module:
-tests\TestFramework.ps1
-containing:
-Write-TestStatus
-Assert-Condition
-Invoke-TestStep
-
-so both:
-Test-FoundationRegression.ps1T
-Test-DependencyModel.ps1
-
-behave identically and report:
-Test-FoundationRegression.ps1
-Test-DependencyModel.ps1
 
 ---
 
@@ -64,26 +49,66 @@ Current Sprint:
 Sprint 3 - Dependency Data
 
 Current Milestone:
-Dependency Export Framework
+Dependency Reporting Framework
 
 Current Feature:
-Export-DependenciesCsv
+Sprint 3 Review
 
-Completed Milestones:
+Completed During Sprint 3:
+✅ Get-DatabaseDependencies
+✅ ReferencingFullName
+✅ ReferencedFullName
+✅ Export-DependenciesCsvCurrent Sprint:
+Sprint 3 - Dependency Data
 
-✅ Foundation
-✅ Regression Framework
-✅ Core Object Export
+Current Milestone:
+Dependency Reporting Framework
+
+Current Feature:
+Sprint 3 Review
+
+Completed During Sprint 3:
+✅ Get-DatabaseDependencies
+✅ ReferencingFullName
+✅ ReferencedFullName
+✅ Export-DependenciesCsv
+✅ Export-DependenciesJson
+✅ Export-DependencyWarnings
+✅ Test-DependencyModel
 
 Regression Status:
-
 ✅ Test-FoundationRegression
-✅ All object exports validated
+✅ Test-DependencyModel
 
-Known Deferred Issues:
+Current Status:
+Sprint 3 development complete.
+Sprint 3 review pending.
+✅ Export-DependenciesJson
+✅ Export-DependencyWarnings
+✅ Test-DependencyModel
 
-- Read-ExportProfile validation report formatting
-- Review need for Test-ExportProfile
+Regression Status:
+✅ Test-FoundationRegression
+✅ Test-DependencyModel
+
+Current Status:
+Sprint 3 development complete.
+Sprint 3 review pending.
+
+## Sprint 3 Deliverables
+
+Generated Outputs:
+
+Dependencies\
+    dependencies.csv
+    dependencies.json
+    dependency-warnings.md
+
+Validated By:
+    tests\Test-DependencyModel.ps1
+
+All outputs are generated from the canonical dependency model.
+
 
 Future functionality is intentionally out of scope until this feature is completed.
 
@@ -151,6 +176,23 @@ SqlServer
 
 Graphviz
     winget install Graphviz.Graphviz
+
+# Future Enhancements
+
+## Test Framework Consolidation
+
+Create:
+
+    tests\TestFramework.ps1
+
+Purpose:
+- Shared Write-TestStatus
+- Shared Assert-Condition
+- Shared Invoke-TestStep
+
+Consumers:
+- Test-FoundationRegression.ps1
+- Test-DependencyModel.ps1    
 
 ## Development Dependencies
 
@@ -638,8 +680,8 @@ All dependency exports shall be generated from a single in-memory dependency mod
 
 Minimum fields:
 
-- ReferencingObject
-- ReferencingSchema
+- ReferencingFullName
+- ReferencedFullName
 - ReferencingType
 
 - ReferencedServer
@@ -655,6 +697,13 @@ Future dependency outputs:
 
 - dependencies.csv
 - dependencies.json
+- Dependencies\dependency-warnings.md
+    Purpose:
+    - Migration review
+    - Operational risk review
+    - Dependency validation
+    - Pre-upgrade assessment
+
 - dependencies.dot
 - dependencies.svg
 - dependencies.html
