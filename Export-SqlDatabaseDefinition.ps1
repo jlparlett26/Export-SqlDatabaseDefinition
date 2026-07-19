@@ -2851,6 +2851,199 @@ function Export-Roles {
         throw [System.InvalidOperationException]::new(('Failed to export roles. {0}' -f $_.Exception.Message))
     }
 }
+
+function Export-Users {
+    <#
+    .SYNOPSIS
+        Exports database users to Security\Users.sql.
+
+    .DESCRIPTION
+        Creates the Security folder when needed and writes deterministic CREATE USER
+        statements for user-defined database users only.
+
+    .PARAMETER Connection
+        Connection result returned by Connect-SqlDatabase.
+
+    .PARAMETER OutputFolder
+        Target export folder.
+
+    .OUTPUTS
+        System.Management.Automation.PSCustomObject
+    #>
+    [CmdletBinding()]
+    [OutputType([System.Management.Automation.PSCustomObject])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Connection,
+
+        [Parameter(Mandatory = $true)]
+        [string]$OutputFolder
+    )
+
+    try {
+        if ($null -eq $Connection) {
+            throw [System.InvalidOperationException]::new('Connection cannot be null.')
+        }
+
+        if ($null -eq $Connection.PSObject.Properties['Connected'] -or -not [bool]$Connection.Connected) {
+            throw [System.InvalidOperationException]::new('Connection.Connected must be true.')
+        }
+
+        if ($null -eq $Connection.PSObject.Properties['DatabaseObject'] -or $null -eq $Connection.DatabaseObject) {
+            throw [System.InvalidOperationException]::new('Connection.DatabaseObject cannot be null.')
+        }
+
+        if ([string]::IsNullOrWhiteSpace($OutputFolder)) {
+            throw [System.InvalidOperationException]::new('OutputFolder cannot be null, empty, or whitespace.')
+        }
+
+        $resolvedOutputFolder = [System.IO.Path]::GetFullPath($OutputFolder.Trim())
+        if (-not (Test-Path -LiteralPath $resolvedOutputFolder -PathType Container)) {
+            throw [System.InvalidOperationException]::new(("OutputFolder does not exist: {0}" -f $resolvedOutputFolder))
+        }
+
+        Write-ExporterLog -Level Information -Message 'Starting user export'
+
+        $securityFolder = [System.IO.Path]::Combine($resolvedOutputFolder, 'Security')
+        if (-not (Test-Path -LiteralPath $securityFolder -PathType Container)) {
+            New-Item -ItemType Directory -Path $securityFolder -Force | Out-Null
+        }
+
+        $usersPath = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($securityFolder, 'Users.sql'))
+
+        $database = $Connection.DatabaseObject
+        $rawUsers = @()
+        if ($null -ne $database.PSObject.Properties['Users']) {
+            $rawUsers = @($database.Users)
+        }
+
+        $excludedUserNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        foreach ($excludedUserName in @('dbo', 'guest', 'INFORMATION_SCHEMA', 'sys')) {
+            [void]$excludedUserNames.Add($excludedUserName)
+        }
+
+        $getUserProperty = {
+            param(
+                [Parameter(Mandatory = $true)]
+                [object]$Object,
+
+                [Parameter(Mandatory = $true)]
+                [string]$PropertyName
+            )
+
+            try {
+                $property = $Object.PSObject.Properties[$PropertyName]
+                if ($null -eq $property) {
+                    return $null
+                }
+
+                return $property.Value
+            }
+            catch {
+                return $null
+            }
+        }
+
+        $escapeSqlIdentifier = {
+            param(
+                [Parameter(Mandatory = $true)]
+                [string]$Value
+            )
+
+            return ('[{0}]' -f $Value.Replace(']', ']]'))
+        }
+
+        $userDefinedUsers = @(
+            $rawUsers |
+                Where-Object {
+                    if ($null -eq $_) {
+                        return $false
+                    }
+
+                    $userName = [string](& $getUserProperty -Object $_ -PropertyName 'Name')
+                    if ([string]::IsNullOrWhiteSpace($userName)) {
+                        return $false
+                    }
+
+                    if ($excludedUserNames.Contains($userName)) {
+                        return $false
+                    }
+
+                    return $true
+                } |
+                Sort-Object -Property Name
+        )
+
+        Write-ExporterLog -Level Information -Message ("User count: {0}" -f $userDefinedUsers.Count)
+        Write-ExporterLog -Level Information -Message ("Output path: {0}" -f $usersPath)
+
+        $lines = [System.Collections.Generic.List[string]]::new()
+
+        if ($userDefinedUsers.Count -eq 0) {
+            $lines.Add('-- No user-defined database users found.')
+        }
+        else {
+            for ($userIndex = 0; $userIndex -lt $userDefinedUsers.Count; $userIndex++) {
+                $databaseUser = $userDefinedUsers[$userIndex]
+
+                $userName = [string](& $getUserProperty -Object $databaseUser -PropertyName 'Name')
+                $loginName = [string](& $getUserProperty -Object $databaseUser -PropertyName 'Login')
+                $defaultSchema = [string](& $getUserProperty -Object $databaseUser -PropertyName 'DefaultSchema')
+
+                if ([string]::IsNullOrWhiteSpace($loginName)) {
+                    $loginName = ''
+                }
+
+                if ([string]::IsNullOrWhiteSpace($defaultSchema)) {
+                    $defaultSchema = ''
+                }
+
+                $lines.Add(('-- User Name: {0}' -f $userName))
+                if (-not [string]::IsNullOrWhiteSpace($loginName)) {
+                    $lines.Add(('-- Login: {0}' -f $loginName))
+                }
+                if (-not [string]::IsNullOrWhiteSpace($defaultSchema)) {
+                    $lines.Add(('-- Default Schema: {0}' -f $defaultSchema))
+                }
+
+                $lines.Add('')
+
+                $createUserStatement = 'CREATE USER {0}' -f (& $escapeSqlIdentifier -Value $userName)
+                if (-not [string]::IsNullOrWhiteSpace($loginName)) {
+                    $createUserStatement += ' FOR LOGIN {0}' -f (& $escapeSqlIdentifier -Value $loginName)
+                }
+                if (-not [string]::IsNullOrWhiteSpace($defaultSchema)) {
+                    $createUserStatement += ' WITH DEFAULT_SCHEMA = {0}' -f (& $escapeSqlIdentifier -Value $defaultSchema)
+                }
+
+                $lines.Add($createUserStatement)
+                $lines.Add('GO')
+
+                if ($userIndex -lt ($userDefinedUsers.Count - 1)) {
+                    $lines.Add('')
+                }
+            }
+        }
+
+        $userScript = [string]::Join([Environment]::NewLine, $lines)
+        if (-not $userScript.EndsWith([Environment]::NewLine)) {
+            $userScript += [Environment]::NewLine
+        }
+
+        [System.IO.File]::WriteAllText($usersPath, $userScript, [System.Text.UTF8Encoding]::new($false))
+
+        Write-ExporterLog -Level Information -Message 'User export completed'
+
+        return [PSCustomObject]@{
+            UserCount = $userDefinedUsers.Count
+            UsersPath = $usersPath
+        }
+    }
+    catch {
+        Write-ExporterLog -Level Error -Message ('User export failed: {0}' -f $_.Exception.Message) -ErrorAction Continue
+        throw [System.InvalidOperationException]::new(('Failed to export users. {0}' -f $_.Exception.Message))
+    }
+}
 #endregion
 
 #region Dependency Functions

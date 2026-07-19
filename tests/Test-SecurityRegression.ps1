@@ -43,6 +43,8 @@ $script:ProfilePath = $null
 $script:ResolvedOutputFolder = $null
 $script:SecurityExportResult = $null
 $script:RolesPath = $null
+$script:UsersExportResult = $null
+$script:UsersPath = $null
 $script:ProjectRoot = Split-Path -Parent $PSScriptRoot
 $script:ExporterScriptPath = Join-Path $script:ProjectRoot 'Export-SqlDatabaseDefinition.ps1'
 $testFrameworkPath = Join-Path $PSScriptRoot 'TestFramework.ps1'
@@ -62,7 +64,8 @@ if (-not (Test-Path -LiteralPath $script:ExporterScriptPath -PathType Leaf)) {
 $requiredExporterFunctions = @(
     'Read-ExportProfile',
     'Connect-SqlDatabase',
-    'Export-Roles'
+    'Export-Roles',
+    'Export-Users'
 )
 
 $missingExporterFunctions = @(
@@ -101,6 +104,10 @@ Invoke-TestStep -Name 'Setup Security Test Context' -ScriptBlock {
     Assert-Condition `
         -Condition ($null -ne (Get-Command -Name Export-Roles -ErrorAction SilentlyContinue)) `
         -Message 'Export-Roles function was not loaded.'
+
+    Assert-Condition `
+        -Condition ($null -ne (Get-Command -Name Export-Users -ErrorAction SilentlyContinue)) `
+        -Message 'Export-Users function was not loaded.'
 }
 
 Invoke-TestStep -Name 'Read-ExportProfile' -ScriptBlock {
@@ -209,6 +216,79 @@ Invoke-TestStep -Name 'Validate Roles Export' -ScriptBlock {
         Assert-Condition `
             -Condition ($rolesRawContent -match [regex]::Escape('No user-defined database roles found.')) `
             -Message 'Roles.sql does not contain the empty-role message.'
+    }
+}
+
+Invoke-TestStep -Name 'Export-Users' -ScriptBlock {
+    if ($null -eq $script:Connection) {
+        Skip-TestStep -Message 'Connect-SqlDatabase did not produce a valid connection object.'
+    }
+
+    if ($script:Connection.Connected -ne $true) {
+        Skip-TestStep -Message 'Connection is not in a connected state.'
+    }
+
+    Assert-Condition `
+        -Condition ($null -ne (Get-Command -Name Export-Users -ErrorAction SilentlyContinue)) `
+        -Message 'Export-Users function was not loaded.'
+
+    $script:UsersExportResult = Export-Users `
+        -Connection $script:Connection `
+        -OutputFolder $script:ResolvedOutputFolder
+
+    Assert-Condition `
+        -Condition ($null -ne $script:UsersExportResult) `
+        -Message 'Export-Users returned null.'
+
+    foreach ($propertyName in @('UserCount', 'UsersPath')) {
+        Assert-Condition `
+            -Condition ($null -ne $script:UsersExportResult.PSObject.Properties[$propertyName]) `
+            -Message ("Export-Users result is missing {0}." -f $propertyName)
+    }
+
+    $script:UsersPath = [string]$script:UsersExportResult.UsersPath
+
+    Assert-Condition `
+        -Condition (-not [string]::IsNullOrWhiteSpace($script:UsersPath)) `
+        -Message 'Export-Users returned an empty UsersPath.'
+
+    Assert-Condition `
+        -Condition (Test-Path -LiteralPath $script:UsersPath -PathType Leaf) `
+        -Message "Users.sql does not exist: $script:UsersPath"
+}
+
+Invoke-TestStep -Name 'Validate Users Export' -ScriptBlock {
+    if ($null -eq $script:UsersExportResult) {
+        Skip-TestStep -Message 'Export-Users did not complete successfully.'
+    }
+
+    $securityFolder = Split-Path -Parent $script:UsersPath
+
+    Assert-Condition `
+        -Condition (Test-Path -LiteralPath $securityFolder -PathType Container) `
+        -Message "Security folder does not exist: $securityFolder"
+
+    Assert-Condition `
+        -Condition (Test-Path -LiteralPath $script:UsersPath -PathType Leaf) `
+        -Message "Users.sql does not exist: $script:UsersPath"
+
+    $usersRawContent = Get-Content -LiteralPath $script:UsersPath -Raw
+
+    Assert-Condition `
+        -Condition (-not [string]::IsNullOrWhiteSpace($usersRawContent)) `
+        -Message "Users.sql is empty: $script:UsersPath"
+
+    $userCount = [int]$script:UsersExportResult.UserCount
+
+    if ($userCount -gt 0) {
+        Assert-Condition `
+            -Condition ($usersRawContent -match 'CREATE USER') `
+            -Message 'Users.sql does not contain CREATE USER while users were exported.'
+    }
+    else {
+        Assert-Condition `
+            -Condition ($usersRawContent -match [regex]::Escape('No user-defined database users found.')) `
+            -Message 'Users.sql does not contain the empty-user message.'
     }
 }
 
