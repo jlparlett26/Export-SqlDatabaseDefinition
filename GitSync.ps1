@@ -58,3 +58,6 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host ""
 Write-Host "Git Sync Complete"
+
+& ".\Sync-ProjectsToOneDrive.ps1"
+

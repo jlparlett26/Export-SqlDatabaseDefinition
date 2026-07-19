@@ -310,7 +310,7 @@ function Read-ExportProfile {
         The full or relative path to the export profile YAML file.
 
     .EXAMPLE
-        Read-ExportProfile -Path 'C:\Exports\BannerProd\export.yaml'
+        Read-ExportProfile -Path 'C:\Exports\DatabaseName\export.yaml'
 
     .OUTPUTS
         System.Object
