@@ -74,14 +74,14 @@ PSScriptAnalyzer exceptions are accepted by design:
 
 Current Sprint:
 
-Sprint 5 - Security
+Sprint 6 - Reference Data
 
 Current Milestone:
 
-Security Export Framework
+Reference Data Framework
 
 Current Feature:
-Export-Permissions
+Reference Data Design Review
 
 Completed Milestones:
 
@@ -89,6 +89,7 @@ Completed Milestones:
 - Core Object Export
 - Dependency Data Export
 - Dependency Visualization
+- Security Export
 
 Regression Status:
 
@@ -98,11 +99,13 @@ Regression Status:
 
 Current Status:
 
-✅ Export-Roles complete
-✅ Export-Users complete
-✅ Security\Roles.sql generated
-✅ Security\Users.sql generated
+✅ Sprint 5 complete
+✅ Security export complete
 ✅ Test-SecurityRegression PASS
+
+Current Test Status:
+
+All regression suites passing.
 
 ## Architectural Rules
 
@@ -383,7 +386,7 @@ Status:
 
 - Roles.sql: implemented
 - Users.sql: implemented
-- Permissions.sql: remaining
+- Permissions.sql: implemented
 
 Primary use case:
 
@@ -771,6 +774,7 @@ Completed:
 
 - Export-Roles
 - Export-Users
+- Export-Permissions
 
 Validated By:
 
@@ -778,11 +782,15 @@ Validated By:
 
 In Progress:
 
-- Export-Permissions
+- None
 
 Planned:
 
 - Security permission analysis (future if applicable)
+
+Status:
+
+Sprint 5 complete.
 
 Validation Strategy:
 
@@ -792,14 +800,41 @@ Each security export should produce deterministic output.
 
 Lessons Learned:
 
-Security exports continue to follow the
-deterministic one-file-per-artifact design used
-throughout the exporter.
+The security export subsystem follows the same
+deterministic export patterns used throughout the project.
 
-Test-SecurityRegression remains the authoritative
-validation suite for Sprint 5 work.
+Dedicated security regression testing simplified
+implementation and validation.
 
 ### Sprint 6 - Reference Data
+
+Sprint 6 Startup Notes:
+
+Sprint 6 Goal:
+
+Export selected reference data from configured tables.
+
+Planned Outputs:
+
+```text
+ReferenceData\
+    <TableName>.sql
+```
+
+Reference Data Design Principles:
+
+- YAML-controlled
+- Explicit table selection
+- Deterministic output
+- One file per table
+- No automatic table discovery
+
+Recommended Build Order:
+
+1. Reference Data Design Review
+2. Define YAML schema
+3. Export-ReferenceData
+4. Reference Data Regression Testing
 
 - Export lookup tables
 - YAML controlled configuration
@@ -889,6 +924,9 @@ Report:
 - Objects using reserved words
 - Objects with spaces
 - Mixed naming standards
+- MS SQL Coding standards
+- Joins, Right outer, Left outer used
+ -Joins producing a cartesian result
 
 Output:
 

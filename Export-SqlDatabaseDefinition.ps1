@@ -2807,7 +2807,7 @@ function Export-Roles {
                 if ([string]::IsNullOrWhiteSpace($roleOwner)) {
                     $roleOwner = ''
                 }
-                elseif ($null -ne $role.PSObject.Properties['Owner'] -and $null -ne $role.Owner -and $role.Owner.PSObject.Properties['Name'] -ne $null) {
+                elseif ($null -ne $role.PSObject.Properties['Owner'] -and $null -ne $role.Owner -and $null -ne$role.Owner.PSObject.Properties['Name']) {
                     $roleOwner = [string]$role.Owner.Name
                 }
 
@@ -3042,6 +3042,296 @@ function Export-Users {
     catch {
         Write-ExporterLog -Level Error -Message ('User export failed: {0}' -f $_.Exception.Message) -ErrorAction Continue
         throw [System.InvalidOperationException]::new(('Failed to export users. {0}' -f $_.Exception.Message))
+    }
+}
+
+function Export-Permissions {
+    <#
+    .SYNOPSIS
+        Exports database permissions to Security\Permissions.sql.
+
+    .DESCRIPTION
+        Creates the Security folder when needed and writes deterministic SQL-style
+        permission statements for database-level, schema-level, and object-level
+        permissions from database metadata.
+
+    .PARAMETER Connection
+        Connection result returned by Connect-SqlDatabase.
+
+    .PARAMETER OutputFolder
+        Target export folder.
+
+    .OUTPUTS
+        System.Management.Automation.PSCustomObject
+    #>
+    [CmdletBinding()]
+    [OutputType([System.Management.Automation.PSCustomObject])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Connection,
+
+        [Parameter(Mandatory = $true)]
+        [string]$OutputFolder
+    )
+
+    try {
+        if ($null -eq $Connection) {
+            throw [System.InvalidOperationException]::new('Connection cannot be null.')
+        }
+
+        if ($null -eq $Connection.PSObject.Properties['Connected'] -or -not [bool]$Connection.Connected) {
+            throw [System.InvalidOperationException]::new('Connection.Connected must be true.')
+        }
+
+        if ($null -eq $Connection.PSObject.Properties['DatabaseObject'] -or $null -eq $Connection.DatabaseObject) {
+            throw [System.InvalidOperationException]::new('Connection.DatabaseObject cannot be null.')
+        }
+
+        if ([string]::IsNullOrWhiteSpace($OutputFolder)) {
+            throw [System.InvalidOperationException]::new('OutputFolder cannot be null, empty, or whitespace.')
+        }
+
+        $resolvedOutputFolder = [System.IO.Path]::GetFullPath($OutputFolder.Trim())
+        if (-not (Test-Path -LiteralPath $resolvedOutputFolder -PathType Container)) {
+            throw [System.InvalidOperationException]::new(("OutputFolder does not exist: {0}" -f $resolvedOutputFolder))
+        }
+
+        Write-ExporterLog -Level Information -Message 'Starting permission export'
+
+        $securityFolder = [System.IO.Path]::Combine($resolvedOutputFolder, 'Security')
+        if (-not (Test-Path -LiteralPath $securityFolder -PathType Container)) {
+            New-Item -ItemType Directory -Path $securityFolder -Force | Out-Null
+        }
+
+        $permissionsPath = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($securityFolder, 'Permissions.sql'))
+
+        $databaseName = ''
+        if ($null -ne $Connection.PSObject.Properties['DatabaseName'] -and -not [string]::IsNullOrWhiteSpace([string]$Connection.DatabaseName)) {
+            $databaseName = [string]$Connection.DatabaseName
+        }
+        elseif ($null -ne $Connection.DatabaseObject.PSObject.Properties['Name'] -and -not [string]::IsNullOrWhiteSpace([string]$Connection.DatabaseObject.Name)) {
+            $databaseName = [string]$Connection.DatabaseObject.Name
+        }
+
+        if ([string]::IsNullOrWhiteSpace($databaseName)) {
+            throw [System.InvalidOperationException]::new('Database name is unavailable from the connection object.')
+        }
+
+        $serverObject = $null
+        if ($null -ne $Connection.PSObject.Properties['ServerObject'] -and $null -ne $Connection.ServerObject) {
+            $serverObject = $Connection.ServerObject
+        }
+        elseif ($null -ne $Connection.DatabaseObject.PSObject.Properties['Parent']) {
+            $serverObject = $Connection.DatabaseObject.Parent
+        }
+
+        if ($null -eq $serverObject) {
+            throw [System.InvalidOperationException]::new('Connection does not contain a usable SQL Server object for permission queries.')
+        }
+
+        if ($null -eq $serverObject.PSObject.Properties['ConnectionContext'] -or $null -eq $serverObject.ConnectionContext) {
+            throw [System.InvalidOperationException]::new('SQL Server connection context is unavailable for permission queries.')
+        }
+
+        $escapeSqlIdentifier = {
+            param(
+                [Parameter(Mandatory = $true)]
+                [string]$Value
+            )
+
+            return ('[{0}]' -f $Value.Replace(']', ']]'))
+        }
+
+        $permissionQuery = @"
+SELECT
+    dp.state_desc AS PermissionState,
+    dp.permission_name AS PermissionName,
+    grantee.name AS GranteeName,
+    dp.class_desc AS ClassDescription,
+    OBJECT_SCHEMA_NAME(dp.major_id) AS ObjectSchemaName,
+    OBJECT_NAME(dp.major_id) AS ObjectName,
+    schemaTarget.name AS SchemaName
+FROM sys.database_permissions AS dp
+INNER JOIN sys.database_principals AS grantee
+    ON dp.grantee_principal_id = grantee.principal_id
+LEFT JOIN sys.schemas AS schemaTarget
+    ON dp.class = 3
+    AND dp.major_id = schemaTarget.schema_id
+ORDER BY
+    grantee.name,
+    COALESCE(OBJECT_SCHEMA_NAME(dp.major_id), schemaTarget.name, ''),
+    COALESCE(OBJECT_NAME(dp.major_id), ''),
+    dp.permission_name,
+    dp.state_desc;
+"@
+
+        $executeQuery = "USE {0};{1}{2}" -f (& $escapeSqlIdentifier -Value $databaseName), [Environment]::NewLine, $permissionQuery
+
+        $queryResult = $null
+        try {
+            $queryResult = $serverObject.ConnectionContext.ExecuteWithResults($executeQuery)
+        }
+        catch {
+            throw [System.InvalidOperationException]::new(("Permission query failed for database [{0}]." -f $databaseName))
+        }
+
+        $rows = @()
+        if ($null -ne $queryResult -and $null -ne $queryResult.Tables -and $queryResult.Tables.Count -gt 0) {
+            $rows = @($queryResult.Tables[0].Rows)
+        }
+
+        $getRowValue = {
+            param(
+                [Parameter(Mandatory = $true)]
+                [object]$Row,
+
+                [Parameter(Mandatory = $true)]
+                [string]$ColumnName
+            )
+
+            if ($null -eq $Row -or $null -eq $Row.Table -or -not $Row.Table.Columns.Contains($ColumnName)) {
+                return $null
+            }
+
+            $value = $Row[$ColumnName]
+            if ($null -eq $value -or $value -is [System.DBNull]) {
+                return $null
+            }
+
+            return $value
+        }
+
+        $permissionRecords = @(
+            foreach ($row in $rows) {
+                $permissionState = [string](& $getRowValue -Row $row -ColumnName 'PermissionState')
+                $permissionName = [string](& $getRowValue -Row $row -ColumnName 'PermissionName')
+                $granteeName = [string](& $getRowValue -Row $row -ColumnName 'GranteeName')
+                $classDescription = [string](& $getRowValue -Row $row -ColumnName 'ClassDescription')
+                $objectSchemaName = [string](& $getRowValue -Row $row -ColumnName 'ObjectSchemaName')
+                $objectName = [string](& $getRowValue -Row $row -ColumnName 'ObjectName')
+                $schemaName = [string](& $getRowValue -Row $row -ColumnName 'SchemaName')
+
+                if ([string]::IsNullOrWhiteSpace($permissionName) -or [string]::IsNullOrWhiteSpace($granteeName)) {
+                    continue
+                }
+
+                [PSCustomObject]@{
+                    PermissionState = $permissionState
+                    PermissionName = $permissionName
+                    GranteeName = $granteeName
+                    ClassDescription = $classDescription
+                    ObjectSchemaName = $objectSchemaName
+                    ObjectName = $objectName
+                    SchemaName = $schemaName
+                }
+            }
+        )
+
+        $sortedPermissions = @(
+            $permissionRecords |
+                Sort-Object -Property GranteeName, ObjectSchemaName, ObjectName, PermissionName, PermissionState, ClassDescription, SchemaName
+        )
+
+        Write-ExporterLog -Level Information -Message ("Permission count: {0}" -f $sortedPermissions.Count)
+        Write-ExporterLog -Level Information -Message ("Output path: {0}" -f $permissionsPath)
+
+        $lines = [System.Collections.Generic.List[string]]::new()
+
+        if ($sortedPermissions.Count -eq 0) {
+            $lines.Add('-- No database permissions found.')
+        }
+        else {
+            for ($permissionIndex = 0; $permissionIndex -lt $sortedPermissions.Count; $permissionIndex++) {
+                $permission = $sortedPermissions[$permissionIndex]
+
+                $permissionStateUpper = ([string]$permission.PermissionState).Trim().ToUpperInvariant()
+                $permissionName = ([string]$permission.PermissionName).Trim().ToUpperInvariant()
+                $granteeName = ([string]$permission.GranteeName).Trim()
+                $classDescription = ([string]$permission.ClassDescription).Trim().ToUpperInvariant()
+                $objectSchemaName = ([string]$permission.ObjectSchemaName).Trim()
+                $objectName = ([string]$permission.ObjectName).Trim()
+                $schemaName = ([string]$permission.SchemaName).Trim()
+
+                $permissionVerb = 'GRANT'
+                $withGrantOption = $false
+
+                switch ($permissionStateUpper) {
+                    'DENY' {
+                        $permissionVerb = 'DENY'
+                    }
+                    'GRANT_WITH_GRANT_OPTION' {
+                        $permissionVerb = 'GRANT'
+                        $withGrantOption = $true
+                    }
+                    default {
+                        $permissionVerb = 'GRANT'
+                    }
+                }
+
+                $objectDisplayName = ''
+                if (-not [string]::IsNullOrWhiteSpace($objectSchemaName) -and -not [string]::IsNullOrWhiteSpace($objectName)) {
+                    $objectDisplayName = ('{0}.{1}' -f $objectSchemaName, $objectName)
+                }
+                elseif (-not [string]::IsNullOrWhiteSpace($schemaName)) {
+                    $objectDisplayName = $schemaName
+                }
+                else {
+                    $objectDisplayName = 'DATABASE'
+                }
+
+                $lines.Add(('-- Permission: {0}' -f $permissionName))
+                $lines.Add(('-- Grantee: {0}' -f $granteeName))
+                $lines.Add(('-- Object: {0}' -f $objectDisplayName))
+                $lines.Add('')
+
+                $statementLines = [System.Collections.Generic.List[string]]::new()
+                $statementLines.Add(('{0} {1}' -f $permissionVerb, $permissionName))
+
+                if ($classDescription -eq 'OBJECT_OR_COLUMN' -and -not [string]::IsNullOrWhiteSpace($objectSchemaName) -and -not [string]::IsNullOrWhiteSpace($objectName)) {
+                    $statementLines.Add(('    ON {0}.{1}' -f (& $escapeSqlIdentifier -Value $objectSchemaName), (& $escapeSqlIdentifier -Value $objectName)))
+                }
+                elseif ($classDescription -eq 'SCHEMA' -and -not [string]::IsNullOrWhiteSpace($schemaName)) {
+                    $statementLines.Add(('    ON SCHEMA::{0}' -f (& $escapeSqlIdentifier -Value $schemaName)))
+                }
+                elseif ($classDescription -eq 'DATABASE') {
+                    # Database-level permissions do not require an ON clause.
+                }
+
+                $statementLines.Add(('    TO {0}' -f (& $escapeSqlIdentifier -Value $granteeName)))
+
+                if ($withGrantOption) {
+                    $statementLines.Add('    WITH GRANT OPTION')
+                }
+
+                foreach ($statementLine in $statementLines) {
+                    $lines.Add($statementLine)
+                }
+
+                $lines.Add('GO')
+
+                if ($permissionIndex -lt ($sortedPermissions.Count - 1)) {
+                    $lines.Add('')
+                }
+            }
+        }
+
+        $permissionScript = [string]::Join([Environment]::NewLine, $lines)
+        if (-not $permissionScript.EndsWith([Environment]::NewLine)) {
+            $permissionScript += [Environment]::NewLine
+        }
+
+        [System.IO.File]::WriteAllText($permissionsPath, $permissionScript, [System.Text.UTF8Encoding]::new($false))
+
+        Write-ExporterLog -Level Information -Message 'Permission export completed'
+
+        return [PSCustomObject]@{
+            PermissionCount = $sortedPermissions.Count
+            PermissionsPath = $permissionsPath
+        }
+    }
+    catch {
+        Write-ExporterLog -Level Error -Message ('Permission export failed: {0}' -f $_.Exception.Message) -ErrorAction Continue
+        throw [System.InvalidOperationException]::new(('Failed to export permissions. {0}' -f $_.Exception.Message))
     }
 }
 #endregion

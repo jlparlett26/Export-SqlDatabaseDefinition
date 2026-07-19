@@ -45,6 +45,8 @@ $script:SecurityExportResult = $null
 $script:RolesPath = $null
 $script:UsersExportResult = $null
 $script:UsersPath = $null
+$script:PermissionsExportResult = $null
+$script:PermissionsPath = $null
 $script:ProjectRoot = Split-Path -Parent $PSScriptRoot
 $script:ExporterScriptPath = Join-Path $script:ProjectRoot 'Export-SqlDatabaseDefinition.ps1'
 $testFrameworkPath = Join-Path $PSScriptRoot 'TestFramework.ps1'
@@ -65,7 +67,8 @@ $requiredExporterFunctions = @(
     'Read-ExportProfile',
     'Connect-SqlDatabase',
     'Export-Roles',
-    'Export-Users'
+    'Export-Users',
+    'Export-Permissions'
 )
 
 $missingExporterFunctions = @(
@@ -108,6 +111,10 @@ Invoke-TestStep -Name 'Setup Security Test Context' -ScriptBlock {
     Assert-Condition `
         -Condition ($null -ne (Get-Command -Name Export-Users -ErrorAction SilentlyContinue)) `
         -Message 'Export-Users function was not loaded.'
+
+    Assert-Condition `
+        -Condition ($null -ne (Get-Command -Name Export-Permissions -ErrorAction SilentlyContinue)) `
+        -Message 'Export-Permissions function was not loaded.'
 }
 
 Invoke-TestStep -Name 'Read-ExportProfile' -ScriptBlock {
@@ -316,6 +323,106 @@ Invoke-TestStep -Name 'Validate Users Export' -ScriptBlock {
         Assert-Condition `
             -Condition ($usersRawContent -match [regex]::Escape('No user-defined database users found.')) `
             -Message 'Users.sql does not contain the empty-user message.'
+    }
+}
+
+Invoke-TestStep -Name 'Export-Permissions' -ScriptBlock {
+    if ($null -eq $script:Connection) {
+        Skip-TestStep -Message 'Connect-SqlDatabase did not produce a valid connection object.'
+    }
+
+    if ($script:Connection.Connected -ne $true) {
+        Skip-TestStep -Message 'Connection is not in a connected state.'
+    }
+
+    Assert-Condition `
+        -Condition ($null -ne (Get-Command -Name Export-Permissions -ErrorAction SilentlyContinue)) `
+        -Message 'Export-Permissions function was not loaded.'
+
+    $script:PermissionsExportResult = Export-Permissions `
+        -Connection $script:Connection `
+        -OutputFolder $script:ResolvedOutputFolder
+
+    Assert-Condition `
+        -Condition ($null -ne $script:PermissionsExportResult) `
+        -Message 'Export-Permissions returned null.'
+
+    foreach ($propertyName in @('PermissionCount', 'PermissionsPath')) {
+        Assert-Condition `
+            -Condition ($null -ne $script:PermissionsExportResult.PSObject.Properties[$propertyName]) `
+            -Message ("Export-Permissions result is missing {0}." -f $propertyName)
+    }
+
+    $script:PermissionsPath = [string]$script:PermissionsExportResult.PermissionsPath
+
+    Assert-Condition `
+        -Condition (-not [string]::IsNullOrWhiteSpace($script:PermissionsPath)) `
+        -Message 'Export-Permissions returned an empty PermissionsPath.'
+
+    Assert-Condition `
+        -Condition (Test-Path -LiteralPath $script:PermissionsPath -PathType Leaf) `
+        -Message "Permissions.sql does not exist: $script:PermissionsPath"
+}
+
+Invoke-TestStep -Name 'Validate Permissions Export' -ScriptBlock {
+    if ($null -eq $script:PermissionsExportResult) {
+        Skip-TestStep -Message 'Export-Permissions did not complete successfully.'
+    }
+
+    $securityFolder = Split-Path -Parent $script:PermissionsPath
+
+    Assert-Condition `
+        -Condition (Test-Path -LiteralPath $securityFolder -PathType Container) `
+        -Message "Security folder does not exist: $securityFolder"
+
+    Assert-Condition `
+        -Condition (Test-Path -LiteralPath $script:PermissionsPath -PathType Leaf) `
+        -Message "Permissions.sql does not exist: $script:PermissionsPath"
+
+    $permissionsRawContent = Get-Content -LiteralPath $script:PermissionsPath -Raw
+
+    Assert-Condition `
+        -Condition (-not [string]::IsNullOrWhiteSpace($permissionsRawContent)) `
+        -Message "Permissions.sql is empty: $script:PermissionsPath"
+
+    $permissionsFileBytes = [System.IO.File]::ReadAllBytes($script:PermissionsPath)
+
+    Assert-Condition `
+        -Condition ($permissionsFileBytes.Length -gt 0) `
+        -Message "Permissions.sql contains no bytes: $script:PermissionsPath"
+
+    $hasUtf8Bom = $false
+    if ($permissionsFileBytes.Length -ge 3) {
+        $hasUtf8Bom = (
+            ($permissionsFileBytes[0] -eq 0xEF) -and
+            ($permissionsFileBytes[1] -eq 0xBB) -and
+            ($permissionsFileBytes[2] -eq 0xBF)
+        )
+    }
+
+    Assert-Condition `
+        -Condition (-not $hasUtf8Bom) `
+        -Message 'Permissions.sql is encoded with a UTF-8 BOM. Expected UTF-8 without BOM.'
+
+    try {
+        $strictUtf8 = [System.Text.UTF8Encoding]::new($false, $true)
+        [void]$strictUtf8.GetString($permissionsFileBytes)
+    }
+    catch {
+        throw 'Permissions.sql is not valid UTF-8 encoded text.'
+    }
+
+    $permissionCount = [int]$script:PermissionsExportResult.PermissionCount
+
+    if ($permissionCount -gt 0) {
+        Assert-Condition `
+            -Condition ($permissionsRawContent -match '\b(GRANT|DENY|REVOKE)\b') `
+            -Message 'Permissions.sql does not contain GRANT, DENY, or REVOKE while permissions were exported.'
+    }
+    else {
+        Assert-Condition `
+            -Condition ($permissionsRawContent -match [regex]::Escape('No database permissions found.')) `
+            -Message 'Permissions.sql does not contain the empty-permissions message.'
     }
 }
 
