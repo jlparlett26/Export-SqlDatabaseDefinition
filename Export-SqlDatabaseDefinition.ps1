@@ -1721,6 +1721,891 @@ function Export-Functions {
     }
 }
 
+function Export-Triggers {
+    <#
+    .SYNOPSIS
+        Exports user-defined trigger definitions to one file per trigger.
+
+    .DESCRIPTION
+        Creates the Triggers output folder when needed and writes deterministic,
+        schema-only trigger scripts for user-defined database and table triggers.
+
+    .PARAMETER Connection
+        Connection result returned by Connect-SqlDatabase.
+
+    .PARAMETER OutputFolder
+        Target export folder.
+
+    .OUTPUTS
+        System.Management.Automation.PSCustomObject
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Connection,
+
+        [Parameter(Mandatory = $true)]
+        [string]$OutputFolder
+    )
+
+    try {
+        if ($null -eq $Connection) {
+            throw [System.InvalidOperationException]::new('Connection cannot be null.')
+        }
+
+        if (-not [bool]$Connection.Connected) {
+            throw [System.InvalidOperationException]::new('Connection.Connected must be true.')
+        }
+
+        if ($null -eq $Connection.DatabaseObject) {
+            throw [System.InvalidOperationException]::new('Connection.DatabaseObject cannot be null.')
+        }
+
+        if ([string]::IsNullOrWhiteSpace($OutputFolder)) {
+            throw [System.InvalidOperationException]::new('OutputFolder cannot be null, empty, or whitespace.')
+        }
+
+        $resolvedOutputFolder = [System.IO.Path]::GetFullPath($OutputFolder.Trim())
+        if (-not (Test-Path -LiteralPath $resolvedOutputFolder -PathType Container)) {
+            throw [System.InvalidOperationException]::new(("OutputFolder does not exist: {0}" -f $resolvedOutputFolder))
+        }
+
+        Write-Log -Level Information -Message 'Starting trigger export'
+
+        $triggersFolder = [System.IO.Path]::Combine($resolvedOutputFolder, 'Triggers')
+        if (-not (Test-Path -LiteralPath $triggersFolder -PathType Container)) {
+            New-Item -ItemType Directory -Path $triggersFolder -Force | Out-Null
+        }
+
+        $database = $Connection.DatabaseObject
+
+        $getBooleanProperty = {
+            param(
+                [Parameter(Mandatory = $true)]
+                [object]$Object,
+
+                [Parameter(Mandatory = $true)]
+                [string]$PropertyName
+            )
+
+            try {
+                $property = $Object.PSObject.Properties[$PropertyName]
+                if ($null -eq $property -or $null -eq $property.Value) {
+                    return $false
+                }
+
+                return [bool]$property.Value
+            }
+            catch {
+                return $false
+            }
+        }
+
+        $triggerEntries = [System.Collections.Generic.List[object]]::new()
+
+        foreach ($databaseTrigger in @($database.Triggers)) {
+            if ($null -eq $databaseTrigger) {
+                continue
+            }
+
+            if (& $getBooleanProperty -Object $databaseTrigger -PropertyName 'IsSystemObject') {
+                continue
+            }
+
+            if (& $getBooleanProperty -Object $databaseTrigger -PropertyName 'IsSystem') {
+                continue
+            }
+
+            if ([string]::IsNullOrWhiteSpace([string]$databaseTrigger.Name)) {
+                continue
+            }
+
+            $databaseTriggerType = 'Database'
+            try {
+                $databaseTriggerTypeName = $databaseTrigger.GetType().Name
+                if (-not [string]::IsNullOrWhiteSpace($databaseTriggerTypeName) -and ($databaseTriggerTypeName -match 'Ddl')) {
+                    $databaseTriggerType = 'DDL'
+                }
+            }
+            catch {
+                $databaseTriggerType = 'Database'
+            }
+
+            $triggerEntries.Add([PSCustomObject]@{
+                Scope = 'Database'
+                ScopeOrder = 1
+                SchemaName = 'Database'
+                TriggerName = [string]$databaseTrigger.Name
+                TriggerType = $databaseTriggerType
+                ParentObject = $null
+                TriggerObject = $databaseTrigger
+            })
+        }
+
+        $userTables = @(
+            @($database.Tables) |
+                Where-Object {
+                    $null -ne $_ -and
+                    -not [string]::IsNullOrWhiteSpace([string]$_.Schema) -and
+                    -not [string]::IsNullOrWhiteSpace([string]$_.Name) -and
+                    ([string]$_.Schema -ine 'sys') -and
+                    ([string]$_.Schema -ine 'INFORMATION_SCHEMA') -and
+                    (-not (& $getBooleanProperty -Object $_ -PropertyName 'IsSystemObject'))
+                }
+        )
+
+        foreach ($table in $userTables) {
+            foreach ($tableTrigger in @($table.Triggers)) {
+                if ($null -eq $tableTrigger) {
+                    continue
+                }
+
+                if (& $getBooleanProperty -Object $tableTrigger -PropertyName 'IsSystemObject') {
+                    continue
+                }
+
+                if (& $getBooleanProperty -Object $tableTrigger -PropertyName 'IsSystem') {
+                    continue
+                }
+
+                if ([string]::IsNullOrWhiteSpace([string]$tableTrigger.Name)) {
+                    continue
+                }
+
+                $schemaName = if (-not [string]::IsNullOrWhiteSpace([string]$tableTrigger.Schema)) {
+                    [string]$tableTrigger.Schema
+                }
+                else {
+                    [string]$table.Schema
+                }
+
+                if ([string]::IsNullOrWhiteSpace($schemaName)) {
+                    $schemaName = 'dbo'
+                }
+
+                $triggerEntries.Add([PSCustomObject]@{
+                    Scope = 'Table'
+                    ScopeOrder = 2
+                    SchemaName = $schemaName
+                    TriggerName = [string]$tableTrigger.Name
+                    TriggerType = 'DML/Table'
+                    ParentObject = ("{0}.{1}" -f [string]$table.Schema, [string]$table.Name)
+                    TriggerObject = $tableTrigger
+                })
+            }
+        }
+
+        $orderedTriggers = @(
+            $triggerEntries |
+                Sort-Object -Property ScopeOrder, SchemaName, TriggerName
+        )
+
+        Write-Log -Level Information -Message ("Trigger count: {0}" -f $orderedTriggers.Count)
+
+        $databaseTriggerCount = @($orderedTriggers | Where-Object { $_.TriggerType -eq 'Database' }).Count
+        $ddlTriggerCount = @($orderedTriggers | Where-Object { $_.TriggerType -eq 'DDL' }).Count
+        $dmlTriggerCount = @($orderedTriggers | Where-Object { $_.TriggerType -eq 'DML/Table' }).Count
+
+        $scriptingOptions = New-Object Microsoft.SqlServer.Management.Smo.ScriptingOptions
+        $scriptingOptions.ScriptSchema = $true
+        $scriptingOptions.ScriptData = $false
+        $scriptingOptions.IncludeHeaders = $false
+        $scriptingOptions.SchemaQualify = $true
+
+        try {
+            $batchTerminatorProperty = $scriptingOptions.PSObject.Properties['ScriptBatchTerminator']
+            if ($null -ne $batchTerminatorProperty) {
+                $scriptingOptions.ScriptBatchTerminator = $true
+            }
+        }
+        catch {
+            # Ignore unsupported scripting options on older/different SMO versions.
+        }
+
+        $invalidFileNameCharacters = [System.IO.Path]::GetInvalidFileNameChars()
+        $invalidCharacterPattern = '[{0}]' -f [Regex]::Escape(($invalidFileNameCharacters -join ''))
+        $exportedFiles = [System.Collections.Generic.List[string]]::new()
+
+        foreach ($triggerEntry in $orderedTriggers) {
+            $schemaName = [string]$triggerEntry.SchemaName
+            $triggerName = [string]$triggerEntry.TriggerName
+            $triggerType = [string]$triggerEntry.TriggerType
+            $parentObject = [string]$triggerEntry.ParentObject
+            $safeSchemaName = [Regex]::Replace($schemaName, $invalidCharacterPattern, '_')
+            $safeTriggerName = [Regex]::Replace($triggerName, $invalidCharacterPattern, '_')
+            $triggerFileName = '{0}.{1}.sql' -f $safeSchemaName, $safeTriggerName
+            $triggerFilePath = [System.IO.Path]::Combine($triggersFolder, $triggerFileName)
+
+            $triggerLogLines = @(
+                'Exporting trigger:',
+                ("    Name: {0}" -f $triggerName),
+                ("    Type: {0}" -f $triggerType)
+            )
+
+            if (-not [string]::IsNullOrWhiteSpace($parentObject)) {
+                $triggerLogLines += ("    Parent: {0}" -f $parentObject)
+            }
+
+            Write-Log -Level Information -Message ($triggerLogLines -join [Environment]::NewLine)
+
+            $scriptLines = @()
+            try {
+                $scriptLines = @($triggerEntry.TriggerObject.Script($scriptingOptions))
+            }
+            catch {
+                throw [System.InvalidOperationException]::new(("Trigger scripting failed for [{0}].[{1}]." -f $schemaName, $triggerName))
+            }
+
+            $triggerScript = ($scriptLines -join [Environment]::NewLine)
+
+            $metadataLines = @(
+                ("-- Trigger Type: {0}" -f $triggerType)
+            )
+
+            if (-not [string]::IsNullOrWhiteSpace($parentObject)) {
+                $metadataLines += ("-- Parent Object: {0}" -f $parentObject)
+            }
+
+            $metadataHeader = ($metadataLines -join [Environment]::NewLine)
+            $triggerScript = "{0}{1}{1}{2}" -f $metadataHeader, [Environment]::NewLine, $triggerScript
+
+            if ($triggerScript.Length -gt 0 -and -not $triggerScript.EndsWith([Environment]::NewLine)) {
+                $triggerScript += [Environment]::NewLine
+            }
+
+            [System.IO.File]::WriteAllText($triggerFilePath, $triggerScript, [System.Text.UTF8Encoding]::new($false))
+            $exportedFiles.Add($triggerFilePath)
+            Write-Log -Level Information -Message ("Trigger exported: {0}" -f $triggerFilePath)
+        }
+
+        Write-Log -Level Information -Message 'Trigger export completed'
+
+        return [PSCustomObject]@{
+            TriggerCount = $orderedTriggers.Count
+            DatabaseTriggers = $databaseTriggerCount
+            DdlTriggers = $ddlTriggerCount
+            DmlTriggers = $dmlTriggerCount
+            OutputFolder = $triggersFolder
+            ExportedFiles = @($exportedFiles)
+        }
+    }
+    catch {
+        Write-Log -Level Error -Message ('Trigger export failed: {0}' -f $_.Exception.Message) -ErrorAction Continue
+        throw [System.InvalidOperationException]::new(('Failed to export triggers. {0}' -f $_.Exception.Message))
+    }
+}
+
+function Export-Synonyms {
+    <#
+    .SYNOPSIS
+        Exports user-defined synonym definitions to one file per synonym.
+
+    .DESCRIPTION
+        Creates the Synonyms output folder when needed and writes deterministic,
+        schema-only synonym scripts for user-defined synonyms.
+
+    .PARAMETER Connection
+        Connection result returned by Connect-SqlDatabase.
+
+    .PARAMETER OutputFolder
+        Target export folder.
+
+    .OUTPUTS
+        System.Management.Automation.PSCustomObject
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Connection,
+
+        [Parameter(Mandatory = $true)]
+        [string]$OutputFolder
+    )
+
+    try {
+        if ($null -eq $Connection) {
+            throw [System.InvalidOperationException]::new('Connection cannot be null.')
+        }
+
+        if (-not [bool]$Connection.Connected) {
+            throw [System.InvalidOperationException]::new('Connection.Connected must be true.')
+        }
+
+        if ($null -eq $Connection.DatabaseObject) {
+            throw [System.InvalidOperationException]::new('Connection.DatabaseObject cannot be null.')
+        }
+
+        if ([string]::IsNullOrWhiteSpace($OutputFolder)) {
+            throw [System.InvalidOperationException]::new('OutputFolder cannot be null, empty, or whitespace.')
+        }
+
+        $resolvedOutputFolder = [System.IO.Path]::GetFullPath($OutputFolder.Trim())
+        if (-not (Test-Path -LiteralPath $resolvedOutputFolder -PathType Container)) {
+            throw [System.InvalidOperationException]::new(("OutputFolder does not exist: {0}" -f $resolvedOutputFolder))
+        }
+
+        Write-Log -Level Information -Message 'Starting synonym export'
+
+        $synonymsFolder = [System.IO.Path]::Combine($resolvedOutputFolder, 'Synonyms')
+        if (-not (Test-Path -LiteralPath $synonymsFolder -PathType Container)) {
+            New-Item -ItemType Directory -Path $synonymsFolder -Force | Out-Null
+        }
+
+        $database = $Connection.DatabaseObject
+
+        $getBooleanProperty = {
+            param(
+                [Parameter(Mandatory = $true)]
+                [object]$Object,
+
+                [Parameter(Mandatory = $true)]
+                [string]$PropertyName
+            )
+
+            try {
+                $property = $Object.PSObject.Properties[$PropertyName]
+                if ($null -eq $property -or $null -eq $property.Value) {
+                    return $false
+                }
+
+                return [bool]$property.Value
+            }
+            catch {
+                return $false
+            }
+        }
+
+        $getStringProperty = {
+            param(
+                [Parameter(Mandatory = $true)]
+                [object]$Object,
+
+                [Parameter(Mandatory = $true)]
+                [string]$PropertyName
+            )
+
+            try {
+                $property = $Object.PSObject.Properties[$PropertyName]
+                if ($null -eq $property -or $null -eq $property.Value) {
+                    return ''
+                }
+
+                return [string]$property.Value
+            }
+            catch {
+                return ''
+            }
+        }
+
+        $quoteIdentifier = {
+            param(
+                [Parameter(Mandatory = $true)]
+                [string]$Value
+            )
+
+            return ('[{0}]' -f $Value.Replace(']', ']]'))
+        }
+
+        $userSynonyms = @(
+            @($database.Synonyms) |
+                Where-Object {
+                    $null -ne $_ -and
+                    -not [string]::IsNullOrWhiteSpace([string]$_.Schema) -and
+                    -not [string]::IsNullOrWhiteSpace([string]$_.Name) -and
+                    ([string]$_.Schema -ine 'sys') -and
+                    ([string]$_.Schema -ine 'INFORMATION_SCHEMA') -and
+                    (-not (& $getBooleanProperty -Object $_ -PropertyName 'IsSystemObject')) -and
+                    (-not (& $getBooleanProperty -Object $_ -PropertyName 'IsSystem'))
+                } |
+                Sort-Object -Property Schema, Name
+        )
+
+        Write-Log -Level Information -Message ("Synonym count: {0}" -f $userSynonyms.Count)
+
+        $scriptingOptions = New-Object Microsoft.SqlServer.Management.Smo.ScriptingOptions
+        $scriptingOptions.ScriptSchema = $true
+        $scriptingOptions.ScriptData = $false
+        $scriptingOptions.IncludeHeaders = $false
+        $scriptingOptions.SchemaQualify = $true
+
+        try {
+            $batchTerminatorProperty = $scriptingOptions.PSObject.Properties['ScriptBatchTerminator']
+            if ($null -ne $batchTerminatorProperty) {
+                $scriptingOptions.ScriptBatchTerminator = $true
+            }
+        }
+        catch {
+            # Ignore unsupported scripting options on older/different SMO versions.
+        }
+
+        $invalidFileNameCharacters = [System.IO.Path]::GetInvalidFileNameChars()
+        $invalidCharacterPattern = '[{0}]' -f [Regex]::Escape(($invalidFileNameCharacters -join ''))
+        $exportedFiles = [System.Collections.Generic.List[string]]::new()
+
+        foreach ($synonym in $userSynonyms) {
+            $schemaName = [string]$synonym.Schema
+            $synonymName = [string]$synonym.Name
+            $safeSchemaName = [Regex]::Replace($schemaName, $invalidCharacterPattern, '_')
+            $safeSynonymName = [Regex]::Replace($synonymName, $invalidCharacterPattern, '_')
+            $synonymFileName = '{0}.{1}.sql' -f $safeSchemaName, $safeSynonymName
+            $synonymFilePath = [System.IO.Path]::Combine($synonymsFolder, $synonymFileName)
+
+            $baseObject = [string]$synonym.BaseObject
+            if ([string]::IsNullOrWhiteSpace($baseObject)) {
+                $baseServer = (& $getStringProperty -Object $synonym -PropertyName 'BaseServer')
+                $baseDatabase = (& $getStringProperty -Object $synonym -PropertyName 'BaseDatabase')
+                $baseSchema = (& $getStringProperty -Object $synonym -PropertyName 'BaseSchema')
+                $baseName = (& $getStringProperty -Object $synonym -PropertyName 'BaseObjectName')
+                if ([string]::IsNullOrWhiteSpace($baseName)) {
+                    $baseName = (& $getStringProperty -Object $synonym -PropertyName 'BaseObject')
+                }
+
+                $baseParts = [System.Collections.Generic.List[string]]::new()
+                if (-not [string]::IsNullOrWhiteSpace($baseServer)) {
+                    $baseParts.Add($baseServer)
+                }
+
+                if (-not [string]::IsNullOrWhiteSpace($baseDatabase)) {
+                    $baseParts.Add($baseDatabase)
+                }
+
+                if (-not [string]::IsNullOrWhiteSpace($baseSchema)) {
+                    $baseParts.Add($baseSchema)
+                }
+
+                if (-not [string]::IsNullOrWhiteSpace($baseName)) {
+                    $baseParts.Add($baseName)
+                }
+
+                $baseObject = ($baseParts -join '.')
+            }
+
+            if ([string]::IsNullOrWhiteSpace($baseObject)) {
+                throw [System.InvalidOperationException]::new(("Synonym base object is missing for [{0}].[{1}]." -f $schemaName, $synonymName))
+            }
+
+            Write-Log -Level Information -Message ((
+                'Exporting synonym:{0}    Name: {1}.{2}{0}    Base Object: {3}' -f
+                [Environment]::NewLine,
+                $schemaName,
+                $synonymName,
+                $baseObject
+            ))
+
+            $scriptLines = @()
+            $usedManualScripting = $false
+
+            try {
+                if ($null -ne $synonym -and $null -ne $synonym.PSObject.Methods['Script']) {
+                    $scriptLines = @($synonym.Script($scriptingOptions))
+                }
+            }
+            catch {
+                $usedManualScripting = $true
+            }
+
+            if (@($scriptLines).Count -eq 0) {
+                $usedManualScripting = $true
+            }
+
+            if ($usedManualScripting) {
+                $scriptLines = @(
+                    ('CREATE SYNONYM {0}.{1}' -f (& $quoteIdentifier -Value $schemaName), (& $quoteIdentifier -Value $synonymName)),
+                    ('    FOR {0}' -f $baseObject),
+                    'GO'
+                )
+            }
+
+            $synonymScript = ($scriptLines -join [Environment]::NewLine)
+
+            $metadataLines = @(
+                ("-- Synonym Name: {0}.{1}" -f $schemaName, $synonymName),
+                ("-- Base Object: {0}" -f $baseObject)
+            )
+
+            $metadataHeader = ($metadataLines -join [Environment]::NewLine)
+            $synonymScript = "{0}{1}{1}{2}" -f $metadataHeader, [Environment]::NewLine, $synonymScript
+
+            if ($synonymScript.Length -gt 0 -and -not $synonymScript.EndsWith([Environment]::NewLine)) {
+                $synonymScript += [Environment]::NewLine
+            }
+
+            [System.IO.File]::WriteAllText($synonymFilePath, $synonymScript, [System.Text.UTF8Encoding]::new($false))
+            $exportedFiles.Add($synonymFilePath)
+            Write-Log -Level Information -Message ("Synonym exported: {0}" -f $synonymFilePath)
+        }
+
+        Write-Log -Level Information -Message 'Synonym export completed'
+
+        return [PSCustomObject]@{
+            SynonymCount = $userSynonyms.Count
+            OutputFolder = $synonymsFolder
+            ExportedFiles = @($exportedFiles)
+        }
+    }
+    catch {
+        Write-Log -Level Error -Message ('Synonym export failed: {0}' -f $_.Exception.Message) -ErrorAction Continue
+        throw [System.InvalidOperationException]::new(('Failed to export synonyms. {0}' -f $_.Exception.Message))
+    }
+}
+
+function Export-Sequences {
+    <#
+    .SYNOPSIS
+        Exports user-defined sequence definitions to one file per sequence.
+
+    .DESCRIPTION
+        Creates the Sequences output folder when needed and writes deterministic,
+        schema-only sequence scripts for user-defined sequences.
+
+    .PARAMETER Connection
+        Connection result returned by Connect-SqlDatabase.
+
+    .PARAMETER OutputFolder
+        Target export folder.
+
+    .OUTPUTS
+        System.Management.Automation.PSCustomObject
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Connection,
+
+        [Parameter(Mandatory = $true)]
+        [string]$OutputFolder
+    )
+
+    try {
+        if ($null -eq $Connection) {
+            throw [System.InvalidOperationException]::new('Connection cannot be null.')
+        }
+
+        if (-not [bool]$Connection.Connected) {
+            throw [System.InvalidOperationException]::new('Connection.Connected must be true.')
+        }
+
+        if ($null -eq $Connection.DatabaseObject) {
+            throw [System.InvalidOperationException]::new('Connection.DatabaseObject cannot be null.')
+        }
+
+        if ([string]::IsNullOrWhiteSpace($OutputFolder)) {
+            throw [System.InvalidOperationException]::new('OutputFolder cannot be null, empty, or whitespace.')
+        }
+
+        $resolvedOutputFolder = [System.IO.Path]::GetFullPath($OutputFolder.Trim())
+        if (-not (Test-Path -LiteralPath $resolvedOutputFolder -PathType Container)) {
+            throw [System.InvalidOperationException]::new(("OutputFolder does not exist: {0}" -f $resolvedOutputFolder))
+        }
+
+        Write-Log -Level Information -Message 'Starting sequence export'
+
+        $sequencesFolder = [System.IO.Path]::Combine($resolvedOutputFolder, 'Sequences')
+        if (-not (Test-Path -LiteralPath $sequencesFolder -PathType Container)) {
+            New-Item -ItemType Directory -Path $sequencesFolder -Force | Out-Null
+        }
+
+        $database = $Connection.DatabaseObject
+
+        $getPropertyValue = {
+            param(
+                [Parameter(Mandatory = $true)]
+                [object]$Object,
+
+                [Parameter(Mandatory = $true)]
+                [string]$PropertyName
+            )
+
+            try {
+                $property = $Object.PSObject.Properties[$PropertyName]
+                if ($null -eq $property) {
+                    return $null
+                }
+
+                return $property.Value
+            }
+            catch {
+                return $null
+            }
+        }
+
+        $getBooleanProperty = {
+            param(
+                [Parameter(Mandatory = $true)]
+                [object]$Object,
+
+                [Parameter(Mandatory = $true)]
+                [string]$PropertyName
+            )
+
+            $value = & $getPropertyValue -Object $Object -PropertyName $PropertyName
+            if ($null -eq $value) {
+                return $false
+            }
+
+            try {
+                return [bool]$value
+            }
+            catch {
+                return $false
+            }
+        }
+
+        $getStringProperty = {
+            param(
+                [Parameter(Mandatory = $true)]
+                [object]$Object,
+
+                [Parameter(Mandatory = $true)]
+                [string]$PropertyName
+            )
+
+            $value = & $getPropertyValue -Object $Object -PropertyName $PropertyName
+            if ($null -eq $value) {
+                return ''
+            }
+
+            try {
+                return [string]$value
+            }
+            catch {
+                return ''
+            }
+        }
+
+        $toInvariantString = {
+            param(
+                [Parameter(Mandatory = $false)]
+                [object]$Value
+            )
+
+            if ($null -eq $Value) {
+                return ''
+            }
+
+            try {
+                return [System.Convert]::ToString($Value, [System.Globalization.CultureInfo]::InvariantCulture)
+            }
+            catch {
+                return [string]$Value
+            }
+        }
+
+        $quoteIdentifier = {
+            param(
+                [Parameter(Mandatory = $true)]
+                [string]$Value
+            )
+
+            return ('[{0}]' -f $Value.Replace(']', ']]'))
+        }
+
+        $userSequences = @(
+            @($database.Sequences) |
+                Where-Object {
+                    $null -ne $_ -and
+                    -not [string]::IsNullOrWhiteSpace([string]$_.Schema) -and
+                    -not [string]::IsNullOrWhiteSpace([string]$_.Name) -and
+                    ([string]$_.Schema -ine 'sys') -and
+                    ([string]$_.Schema -ine 'INFORMATION_SCHEMA') -and
+                    (-not (& $getBooleanProperty -Object $_ -PropertyName 'IsSystemObject')) -and
+                    (-not (& $getBooleanProperty -Object $_ -PropertyName 'IsSystem'))
+                } |
+                Sort-Object -Property Schema, Name
+        )
+
+        Write-Log -Level Information -Message ("Sequence count: {0}" -f $userSequences.Count)
+
+        $scriptingOptions = New-Object Microsoft.SqlServer.Management.Smo.ScriptingOptions
+        $scriptingOptions.ScriptSchema = $true
+        $scriptingOptions.ScriptData = $false
+        $scriptingOptions.IncludeHeaders = $false
+        $scriptingOptions.SchemaQualify = $true
+
+        try {
+            $batchTerminatorProperty = $scriptingOptions.PSObject.Properties['ScriptBatchTerminator']
+            if ($null -ne $batchTerminatorProperty) {
+                $scriptingOptions.ScriptBatchTerminator = $true
+            }
+        }
+        catch {
+            # Ignore unsupported scripting options on older/different SMO versions.
+        }
+
+        $invalidFileNameCharacters = [System.IO.Path]::GetInvalidFileNameChars()
+        $invalidCharacterPattern = '[{0}]' -f [Regex]::Escape(($invalidFileNameCharacters -join ''))
+        $exportedFiles = [System.Collections.Generic.List[string]]::new()
+
+        foreach ($sequence in $userSequences) {
+            $schemaName = [string]$sequence.Schema
+            $sequenceName = [string]$sequence.Name
+            $safeSchemaName = [Regex]::Replace($schemaName, $invalidCharacterPattern, '_')
+            $safeSequenceName = [Regex]::Replace($sequenceName, $invalidCharacterPattern, '_')
+            $sequenceFileName = '{0}.{1}.sql' -f $safeSchemaName, $safeSequenceName
+            $sequenceFilePath = [System.IO.Path]::Combine($sequencesFolder, $sequenceFileName)
+
+            $dataType = (& $getStringProperty -Object $sequence -PropertyName 'DataType')
+            if ([string]::IsNullOrWhiteSpace($dataType)) {
+                try {
+                    $dataTypeObject = & $getPropertyValue -Object $sequence -PropertyName 'DataType'
+                    if ($null -ne $dataTypeObject -and $null -ne $dataTypeObject.Name) {
+                        $dataType = [string]$dataTypeObject.Name
+                    }
+                }
+                catch {
+                    $dataType = ''
+                }
+            }
+
+            if ([string]::IsNullOrWhiteSpace($dataType)) {
+                $dataType = 'bigint'
+            }
+
+            $startValue = (& $getPropertyValue -Object $sequence -PropertyName 'StartValue')
+            $incrementValue = (& $getPropertyValue -Object $sequence -PropertyName 'IncrementValue')
+            $minimumValue = (& $getPropertyValue -Object $sequence -PropertyName 'MinimumValue')
+            $maximumValue = (& $getPropertyValue -Object $sequence -PropertyName 'MaximumValue')
+
+            $isCycleEnabled = $false
+            if ($null -ne (& $getPropertyValue -Object $sequence -PropertyName 'IsCycleEnabled')) {
+                $isCycleEnabled = (& $getBooleanProperty -Object $sequence -PropertyName 'IsCycleEnabled')
+            }
+            elseif ($null -ne (& $getPropertyValue -Object $sequence -PropertyName 'Cycle')) {
+                $isCycleEnabled = (& $getBooleanProperty -Object $sequence -PropertyName 'Cycle')
+            }
+
+            $isCached = $false
+            if ($null -ne (& $getPropertyValue -Object $sequence -PropertyName 'IsCached')) {
+                $isCached = (& $getBooleanProperty -Object $sequence -PropertyName 'IsCached')
+            }
+
+            $cacheSize = (& $getPropertyValue -Object $sequence -PropertyName 'CacheSize')
+
+            $startValueText = (& $toInvariantString -Value $startValue)
+            $incrementValueText = (& $toInvariantString -Value $incrementValue)
+            $minimumValueText = (& $toInvariantString -Value $minimumValue)
+            $maximumValueText = (& $toInvariantString -Value $maximumValue)
+            $cacheSizeText = (& $toInvariantString -Value $cacheSize)
+
+            Write-Log -Level Information -Message ("Exporting sequence: {0}.{1}" -f $schemaName, $sequenceName)
+
+            $scriptLines = @()
+            $usedManualScripting = $false
+
+            try {
+                if ($null -ne $sequence -and $null -ne $sequence.PSObject.Methods['Script']) {
+                    $scriptLines = @($sequence.Script($scriptingOptions))
+                }
+            }
+            catch {
+                $usedManualScripting = $true
+            }
+
+            if (@($scriptLines).Count -eq 0) {
+                $usedManualScripting = $true
+            }
+
+            if ($usedManualScripting) {
+                $manualScriptLines = [System.Collections.Generic.List[string]]::new()
+                $manualScriptLines.Add(('CREATE SEQUENCE {0}.{1}' -f (& $quoteIdentifier -Value $schemaName), (& $quoteIdentifier -Value $sequenceName)))
+                $manualScriptLines.Add(('    AS {0}' -f $dataType))
+
+                if (-not [string]::IsNullOrWhiteSpace($startValueText)) {
+                    $manualScriptLines.Add(('    START WITH {0}' -f $startValueText))
+                }
+
+                if (-not [string]::IsNullOrWhiteSpace($incrementValueText)) {
+                    $manualScriptLines.Add(('    INCREMENT BY {0}' -f $incrementValueText))
+                }
+
+                if (-not [string]::IsNullOrWhiteSpace($minimumValueText)) {
+                    $manualScriptLines.Add(('    MINVALUE {0}' -f $minimumValueText))
+                }
+
+                if (-not [string]::IsNullOrWhiteSpace($maximumValueText)) {
+                    $manualScriptLines.Add(('    MAXVALUE {0}' -f $maximumValueText))
+                }
+
+                if ($isCycleEnabled) {
+                    $manualScriptLines.Add('    CYCLE')
+                }
+                else {
+                    $manualScriptLines.Add('    NO CYCLE')
+                }
+
+                if ($isCached) {
+                    if (-not [string]::IsNullOrWhiteSpace($cacheSizeText)) {
+                        $manualScriptLines.Add(('    CACHE {0}' -f $cacheSizeText))
+                    }
+                    else {
+                        $manualScriptLines.Add('    CACHE')
+                    }
+                }
+                else {
+                    $manualScriptLines.Add('    NO CACHE')
+                }
+
+                $manualScriptLines.Add('GO')
+                $scriptLines = @($manualScriptLines)
+            }
+
+            $sequenceScript = ($scriptLines -join [Environment]::NewLine)
+
+            $metadataLines = @(
+                ("-- Sequence Name: {0}.{1}" -f $schemaName, $sequenceName),
+                ("-- Data Type: {0}" -f $dataType),
+                ("-- Start Value: {0}" -f $startValueText),
+                ("-- Increment: {0}" -f $incrementValueText)
+            )
+
+            if (-not [string]::IsNullOrWhiteSpace($minimumValueText)) {
+                $metadataLines += ("-- Minimum Value: {0}" -f $minimumValueText)
+            }
+
+            if (-not [string]::IsNullOrWhiteSpace($maximumValueText)) {
+                $metadataLines += ("-- Maximum Value: {0}" -f $maximumValueText)
+            }
+
+            $metadataLines += ("-- Cycle Option: {0}" -f ($(if ($isCycleEnabled) { 'CYCLE' } else { 'NO CYCLE' })))
+
+            if ($isCached) {
+                if (-not [string]::IsNullOrWhiteSpace($cacheSizeText)) {
+                    $metadataLines += ("-- Cache Option: CACHE {0}" -f $cacheSizeText)
+                }
+                else {
+                    $metadataLines += '-- Cache Option: CACHE'
+                }
+            }
+            else {
+                $metadataLines += '-- Cache Option: NO CACHE'
+            }
+
+            $metadataHeader = ($metadataLines -join [Environment]::NewLine)
+            $sequenceScript = "{0}{1}{1}{2}" -f $metadataHeader, [Environment]::NewLine, $sequenceScript
+
+            if ($sequenceScript.Length -gt 0 -and -not $sequenceScript.EndsWith([Environment]::NewLine)) {
+                $sequenceScript += [Environment]::NewLine
+            }
+
+            [System.IO.File]::WriteAllText($sequenceFilePath, $sequenceScript, [System.Text.UTF8Encoding]::new($false))
+            $exportedFiles.Add($sequenceFilePath)
+            Write-Log -Level Information -Message ("Sequence exported: {0}" -f $sequenceFilePath)
+        }
+
+        Write-Log -Level Information -Message 'Sequence export completed'
+
+        return [PSCustomObject]@{
+            SequenceCount = $userSequences.Count
+            OutputFolder = $sequencesFolder
+            ExportedFiles = @($exportedFiles)
+        }
+    }
+    catch {
+        Write-Log -Level Error -Message ('Sequence export failed: {0}' -f $_.Exception.Message) -ErrorAction Continue
+        throw [System.InvalidOperationException]::new(('Failed to export sequences. {0}' -f $_.Exception.Message))
+    }
+}
+
 function Export-SqlDatabaseDefinition {
     <#
     .SYNOPSIS

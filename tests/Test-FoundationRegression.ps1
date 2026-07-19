@@ -625,6 +625,299 @@ Invoke-TestStep -Name 'Export-Functions' -ScriptBlock {
     }
 }
 
+Invoke-TestStep -Name 'Export-Triggers' -ScriptBlock {
+    if (-not (Get-Command -Name Export-Triggers -ErrorAction SilentlyContinue)) {
+        Skip-TestStep -Message 'Export-Triggers function was not found.'
+    }
+
+    if ($null -eq $script:connection) {
+        Skip-TestStep -Message 'Connect-SqlDatabase did not produce a valid connection object.'
+    }
+
+    $triggerExportResult = Export-Triggers `
+        -Connection $script:connection `
+        -OutputFolder $script:resolvedOutputFolder
+
+    $triggersFolderPath = Join-Path $script:resolvedOutputFolder 'Triggers'
+
+    Assert-Condition `
+        -Condition (Test-Path -LiteralPath $triggersFolderPath -PathType Container) `
+        -Message "Triggers folder was not created: $triggersFolderPath"
+
+    Assert-Condition `
+        -Condition ($null -ne $triggerExportResult) `
+        -Message 'Export-Triggers returned null.'
+
+    Assert-Condition `
+        -Condition ($null -ne $triggerExportResult.PSObject.Properties['TriggerCount']) `
+        -Message 'Export-Triggers result does not include TriggerCount.'
+
+    Assert-Condition `
+        -Condition ($null -ne $triggerExportResult.PSObject.Properties['DatabaseTriggers']) `
+        -Message 'Export-Triggers result does not include DatabaseTriggers.'
+
+    Assert-Condition `
+        -Condition ($null -ne $triggerExportResult.PSObject.Properties['DdlTriggers']) `
+        -Message 'Export-Triggers result does not include DdlTriggers.'
+
+    Assert-Condition `
+        -Condition ($null -ne $triggerExportResult.PSObject.Properties['DmlTriggers']) `
+        -Message 'Export-Triggers result does not include DmlTriggers.'
+
+    Assert-Condition `
+        -Condition ($null -ne $triggerExportResult.PSObject.Properties['OutputFolder']) `
+        -Message 'Export-Triggers result does not include OutputFolder.'
+
+    Assert-Condition `
+        -Condition ($null -ne $triggerExportResult.PSObject.Properties['ExportedFiles']) `
+        -Message 'Export-Triggers result does not include ExportedFiles.'
+
+    $triggerCount = [int]$triggerExportResult.TriggerCount
+    $databaseTriggerCount = [int]$triggerExportResult.DatabaseTriggers
+    $ddlTriggerCount = [int]$triggerExportResult.DdlTriggers
+    $dmlTriggerCount = [int]$triggerExportResult.DmlTriggers
+
+    Assert-Condition `
+        -Condition ($triggerCount -eq ($databaseTriggerCount + $ddlTriggerCount + $dmlTriggerCount)) `
+        -Message 'Export-Triggers count mismatch: TriggerCount does not equal DatabaseTriggers + DdlTriggers + DmlTriggers.'
+
+    if ($triggerCount -gt 0) {
+        $triggerFiles = @(Get-ChildItem -LiteralPath $triggersFolderPath -Filter '*.sql' -File)
+
+        Assert-Condition `
+            -Condition ($triggerFiles.Count -gt 0) `
+            -Message "No trigger files were exported to: $triggersFolderPath"
+
+        $containsTriggerDefinition = $false
+        $containsTriggerTypeHeader = $false
+
+        foreach ($triggerFilePath in @($triggerExportResult.ExportedFiles)) {
+            Assert-Condition `
+                -Condition (-not [string]::IsNullOrWhiteSpace([string]$triggerFilePath)) `
+                -Message 'ExportedFiles contains an empty path value.'
+
+            Assert-Condition `
+                -Condition (Test-Path -LiteralPath $triggerFilePath -PathType Leaf) `
+                -Message "Exported trigger file does not exist: $triggerFilePath"
+
+            $triggerFileContent = Get-Content -LiteralPath $triggerFilePath -Raw
+
+            Assert-Condition `
+                -Condition (-not [string]::IsNullOrWhiteSpace($triggerFileContent)) `
+                -Message "Exported trigger file is empty: $triggerFilePath"
+
+            Assert-Condition `
+                -Condition ($triggerFileContent -match '(?m)^--\s*Trigger\s+Type:\s*.+$') `
+                -Message "Exported trigger file does not include -- Trigger Type: header: $triggerFilePath"
+
+            if ($triggerFileContent -match '(?m)^--\s*Trigger\s+Type:\s*.+$') {
+                $containsTriggerTypeHeader = $true
+            }
+
+            $isDmlTableTrigger = $triggerFileContent -match '(?m)^--\s*Trigger\s+Type:\s*DML/Table\s*$'
+            $hasParentObjectHeader = $triggerFileContent -match '(?m)^--\s*Parent\s+Object:\s*.+$'
+
+            if ($isDmlTableTrigger -and -not $hasParentObjectHeader) {
+                Assert-Condition `
+                    -Condition $false `
+                    -Message "DML/Table trigger file does not include -- Parent Object: header: $triggerFilePath"
+            }
+
+            if ($triggerFileContent -match 'CREATE\s+TRIGGER|ALTER\s+TRIGGER') {
+                $containsTriggerDefinition = $true
+            }
+        }
+
+        Assert-Condition `
+            -Condition ($containsTriggerTypeHeader) `
+            -Message 'No exported trigger file contains -- Trigger Type: metadata header.'
+
+        Assert-Condition `
+            -Condition ($containsTriggerDefinition) `
+            -Message 'No exported trigger file contains CREATE TRIGGER or ALTER TRIGGER.'
+    }
+    else {
+        Write-TestStatus -Status WARN -Message 'Export-Triggers found no user triggers to export.'
+    }
+}
+
+Invoke-TestStep -Name 'Export-Synonyms' -ScriptBlock {
+    if (-not (Get-Command -Name Export-Synonyms -ErrorAction SilentlyContinue)) {
+        Skip-TestStep -Message 'Export-Synonyms function was not found.'
+    }
+
+    if ($null -eq $script:connection) {
+        Skip-TestStep -Message 'Connect-SqlDatabase did not produce a valid connection object.'
+    }
+
+    $synonymExportResult = Export-Synonyms `
+        -Connection $script:connection `
+        -OutputFolder $script:resolvedOutputFolder
+
+    $synonymsFolderPath = Join-Path $script:resolvedOutputFolder 'Synonyms'
+
+    Assert-Condition `
+        -Condition (Test-Path -LiteralPath $synonymsFolderPath -PathType Container) `
+        -Message "Synonyms folder was not created: $synonymsFolderPath"
+
+    Assert-Condition `
+        -Condition ($null -ne $synonymExportResult) `
+        -Message 'Export-Synonyms returned null.'
+
+    Assert-Condition `
+        -Condition ($null -ne $synonymExportResult.PSObject.Properties['SynonymCount']) `
+        -Message 'Export-Synonyms result does not include SynonymCount.'
+
+    Assert-Condition `
+        -Condition ($null -ne $synonymExportResult.PSObject.Properties['OutputFolder']) `
+        -Message 'Export-Synonyms result does not include OutputFolder.'
+
+    Assert-Condition `
+        -Condition ($null -ne $synonymExportResult.PSObject.Properties['ExportedFiles']) `
+        -Message 'Export-Synonyms result does not include ExportedFiles.'
+
+    $synonymCount = [int]$synonymExportResult.SynonymCount
+
+    if ($synonymCount -gt 0) {
+        $synonymFiles = @(Get-ChildItem -LiteralPath $synonymsFolderPath -Filter '*.sql' -File)
+
+        Assert-Condition `
+            -Condition ($synonymFiles.Count -gt 0) `
+            -Message "No synonym files were exported to: $synonymsFolderPath"
+
+        $containsCreateSynonym = $false
+        $containsSynonymNameHeader = $false
+        $containsBaseObjectHeader = $false
+
+        foreach ($synonymFilePath in @($synonymExportResult.ExportedFiles)) {
+            Assert-Condition `
+                -Condition (-not [string]::IsNullOrWhiteSpace([string]$synonymFilePath)) `
+                -Message 'ExportedFiles contains an empty path value.'
+
+            Assert-Condition `
+                -Condition (Test-Path -LiteralPath $synonymFilePath -PathType Leaf) `
+                -Message "Exported synonym file does not exist: $synonymFilePath"
+
+            $synonymFileContent = Get-Content -LiteralPath $synonymFilePath -Raw
+
+            Assert-Condition `
+                -Condition (-not [string]::IsNullOrWhiteSpace($synonymFileContent)) `
+                -Message "Exported synonym file is empty: $synonymFilePath"
+
+            if ($synonymFileContent -match 'CREATE\s+SYNONYM') {
+                $containsCreateSynonym = $true
+            }
+
+            if ($synonymFileContent -match '(?m)^--\s*Synonym\s+Name:\s*.+$') {
+                $containsSynonymNameHeader = $true
+            }
+
+            if ($synonymFileContent -match '(?m)^--\s*Base\s+Object:\s*.+$') {
+                $containsBaseObjectHeader = $true
+            }
+        }
+
+        Assert-Condition `
+            -Condition ($containsCreateSynonym) `
+            -Message 'No exported synonym file contains CREATE SYNONYM.'
+
+        Assert-Condition `
+            -Condition ($containsSynonymNameHeader) `
+            -Message 'No exported synonym file contains -- Synonym Name: metadata header.'
+
+        Assert-Condition `
+            -Condition ($containsBaseObjectHeader) `
+            -Message 'No exported synonym file contains -- Base Object: metadata header.'
+    }
+    else {
+        Write-TestStatus -Status WARN -Message 'Export-Synonyms found no user synonyms to export.'
+    }
+}
+
+Invoke-TestStep -Name 'Export-Sequences' -ScriptBlock {
+    if (-not (Get-Command -Name Export-Sequences -ErrorAction SilentlyContinue)) {
+        Skip-TestStep -Message 'Export-Sequences function was not found.'
+    }
+
+    if ($null -eq $script:connection) {
+        Skip-TestStep -Message 'Connect-SqlDatabase did not produce a valid connection object.'
+    }
+
+    $sequenceExportResult = Export-Sequences `
+        -Connection $script:connection `
+        -OutputFolder $script:resolvedOutputFolder
+
+    $sequencesFolderPath = Join-Path $script:resolvedOutputFolder 'Sequences'
+
+    Assert-Condition `
+        -Condition (Test-Path -LiteralPath $sequencesFolderPath -PathType Container) `
+        -Message "Sequences folder was not created: $sequencesFolderPath"
+
+    Assert-Condition `
+        -Condition ($null -ne $sequenceExportResult) `
+        -Message 'Export-Sequences returned null.'
+
+    Assert-Condition `
+        -Condition ($null -ne $sequenceExportResult.PSObject.Properties['SequenceCount']) `
+        -Message 'Export-Sequences result does not include SequenceCount.'
+
+    Assert-Condition `
+        -Condition ($null -ne $sequenceExportResult.PSObject.Properties['OutputFolder']) `
+        -Message 'Export-Sequences result does not include OutputFolder.'
+
+    Assert-Condition `
+        -Condition ($null -ne $sequenceExportResult.PSObject.Properties['ExportedFiles']) `
+        -Message 'Export-Sequences result does not include ExportedFiles.'
+
+    $sequenceCount = [int]$sequenceExportResult.SequenceCount
+
+    if ($sequenceCount -gt 0) {
+        $sequenceFiles = @(Get-ChildItem -LiteralPath $sequencesFolderPath -Filter '*.sql' -File)
+
+        Assert-Condition `
+            -Condition ($sequenceFiles.Count -gt 0) `
+            -Message "No sequence files were exported to: $sequencesFolderPath"
+
+        $containsCreateSequence = $false
+        $containsSequenceNameHeader = $false
+
+        foreach ($sequenceFilePath in @($sequenceExportResult.ExportedFiles)) {
+            Assert-Condition `
+                -Condition (-not [string]::IsNullOrWhiteSpace([string]$sequenceFilePath)) `
+                -Message 'ExportedFiles contains an empty path value.'
+
+            Assert-Condition `
+                -Condition (Test-Path -LiteralPath $sequenceFilePath -PathType Leaf) `
+                -Message "Exported sequence file does not exist: $sequenceFilePath"
+
+            $sequenceFileContent = Get-Content -LiteralPath $sequenceFilePath -Raw
+
+            Assert-Condition `
+                -Condition (-not [string]::IsNullOrWhiteSpace($sequenceFileContent)) `
+                -Message "Exported sequence file is empty: $sequenceFilePath"
+
+            if ($sequenceFileContent -match 'CREATE\s+SEQUENCE') {
+                $containsCreateSequence = $true
+            }
+
+            if ($sequenceFileContent -match '(?m)^--\s*Sequence\s+Name:\s*.+$') {
+                $containsSequenceNameHeader = $true
+            }
+        }
+
+        Assert-Condition `
+            -Condition ($containsCreateSequence) `
+            -Message 'No exported sequence file contains CREATE SEQUENCE.'
+
+        Assert-Condition `
+            -Condition ($containsSequenceNameHeader) `
+            -Message 'No exported sequence file contains -- Sequence Name: metadata header.'
+    }
+    else {
+        Write-TestStatus -Status WARN -Message 'Export-Sequences found no user sequences to export.'
+    }
+}
+
 Write-Host ''
 Write-Host '----------------------------------------'
 Write-Host 'Regression Test Summary'

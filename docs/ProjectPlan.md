@@ -40,53 +40,26 @@ All PowerShell code should:
 ---
 
 # Current Development State
-Milestone 2 - Regression Framework
-
-✅ Test-FoundationRegression
-
-Purpose:
-
-Provide a single command that validates all completed
-export features against a configured database.
-
-Current coverage:
-
-*
 
 Current Sprint:
-Sprint 2
+Sprint 3 - Dependency Data
 
 Current Milestone:
-Core Object Export
-
-Completed:
-
-✅ Project skeleton
-✅ Logging
-✅ Export profile schema
-✅ Get-DefaultExportProfileContent
-✅ Initialize-ExportProfile
-✅ Read-ExportProfile
-✅ Test-ExportDependencies (functionality complete)
-✅ Test-ExportDependencies Count-property bug
-✅ Connect-SqlDatabase
-✅ exportinfo.json
-✅ export.log (assumed working)
-✅ Export-DatabaseProperties
-✅ Export-Schemas
-✅ Export-Tables
-✅ Export-Views
-✅ Export-StoredProcedures
-✅ Export-Functions
+Dependency Export Framework
 
 Current Feature:
+Export-DependenciesCsv
 
-Export-Triggers
+Completed Milestones:
 
-Next Features:
+✅ Foundation
+✅ Regression Framework
+✅ Core Object Export
 
-Export-Synonyms
-Export-Sequences
+Regression Status:
+
+✅ Test-FoundationRegression
+✅ All object exports validated
 
 Known Deferred Issues:
 
@@ -480,6 +453,11 @@ Purpose:
 - Reporting
 
 ---
+# Dependency Analysis Enhancements
+
+- Preserve synonym base-object metadata in exported files.
+- Use synonym metadata when identifying cross-database and cross-server dependencies.
+- Use synonym metadata during migration analysis and dependency reporting.
 
 # Dependency Visualization
 
@@ -587,6 +565,7 @@ Controlled entirely through YAML.
 
 ## Sprint 1 - Foundation
 
+Completed:
 ✅ Project skeleton
 ✅ Logging
 ✅ Export profile schema
@@ -605,18 +584,31 @@ Controlled entirely through YAML.
 ## Sprint 2 - Core Export
 
 ✅ Connect-SqlDatabase
-✅ Validate server exists
-✅ Validate database exists
-✅ Return connection object
 ✅ Export-Schemas
 ✅ Export-Tables
+✅ Export-Views
+✅ Export-StoredProcedures
+✅ Export-Functions
+✅ Export-Triggers
+✅ Export-Synonyms
+✅ Export-Sequences
 
-⏳ Export-Milestone 
-⏳ Export-Procedures
-⏳ Export-Functions
-⏳ Export-Triggers
-⏳ Export-Synonyms
-⏳ Export-Sequences
+Regression Coverage:
+✅ Full object export validation
+
+Known Technical Debt:
+✅ Read-ExportProfile formatting
+✅ Test-ExportProfile decision pending
+
+Lessons Learned:
+✅ Regression framework became essential
+✅ Object-per-file approach works well
+✅ Metadata headers are valuable
+
+Completed Milestones:
+
+✅ Foundation
+✅ Core Objec
 
 ## Sprint 3 - Dependency Data
 
@@ -762,6 +754,20 @@ BannerProd
 ---
 
 # Future Analysis Features Wishlist
+
+## Script Updates
+
+- Evaluate adding:
+
+    USE [<DatabaseName>]
+    GO
+
+  to exported SQL files to reduce accidental deployment
+  into the wrong database.
+
+- Consider making this configurable through export.yaml.
+
+- Review impact on deployment tools and Git diffs before implementation.
 
 ## Performance
 
