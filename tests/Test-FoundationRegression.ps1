@@ -946,11 +946,13 @@ Invoke-TestStep -Name 'Get-DatabaseDependencies' -ScriptBlock {
             'ReferencingDatabase',
             'ReferencingSchema',
             'ReferencingObject',
+            'ReferencingFullName',
             'ReferencingObjectType',
             'ReferencedServer',
             'ReferencedDatabase',
             'ReferencedSchema',
             'ReferencedObject',
+            'ReferencedFullName',
             'ReferencedObjectType',
             'IsSchemaBound',
             'IsCallerDependent',
@@ -968,6 +970,36 @@ Invoke-TestStep -Name 'Get-DatabaseDependencies' -ScriptBlock {
             Assert-Condition `
                 -Condition ($null -ne $firstDependency.PSObject.Properties[$propertyName]) `
                 -Message ("Dependency object is missing required property: {0}" -f $propertyName)
+        }
+
+        $referencingFullName = [string]$firstDependency.ReferencingFullName
+        $referencingSchema = [string]$firstDependency.ReferencingSchema
+        $referencingObject = [string]$firstDependency.ReferencingObject
+        $expectedReferencingFullName = ('{0}.{1}' -f $referencingSchema, $referencingObject)
+
+        Assert-Condition `
+            -Condition (-not [string]::IsNullOrWhiteSpace($referencingFullName)) `
+            -Message 'ReferencingFullName is empty.'
+
+        Assert-Condition `
+            -Condition ($referencingFullName -eq $expectedReferencingFullName) `
+            -Message 'ReferencingFullName does not match ReferencingSchema.ReferencingObject.'
+
+        Assert-Condition `
+            -Condition (-not $referencingFullName.StartsWith('.')) `
+            -Message 'ReferencingFullName contains a leading period.'
+
+        $referencedFullName = [string]$firstDependency.ReferencedFullName
+        $referencedObject = [string]$firstDependency.ReferencedObject
+
+        Assert-Condition `
+            -Condition (-not $referencedFullName.StartsWith('.')) `
+            -Message 'ReferencedFullName contains a leading period.'
+
+        if (-not [string]::IsNullOrWhiteSpace($referencedObject)) {
+            Assert-Condition `
+                -Condition (-not [string]::IsNullOrWhiteSpace($referencedFullName)) `
+                -Message 'ReferencedFullName is empty for a dependency with an identifiable referenced object.'
         }
     }
     else {

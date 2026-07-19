@@ -3068,6 +3068,7 @@ ORDER BY
 
             $referencingSchema = (& $toStringOrEmpty -Value (& $getRowValue -Row $row -ColumnName 'ReferencingSchema'))
             $referencingObject = (& $toStringOrEmpty -Value (& $getRowValue -Row $row -ColumnName 'ReferencingObject'))
+            $referencingFullName = ('{0}.{1}' -f $referencingSchema, $referencingObject)
             $referencingObjectType = (& $normalizeObjectType -TypeValue (& $getRowValue -Row $row -ColumnName 'ReferencingObjectTypeRaw'))
 
             $referencedServerRaw = (& $toStringOrEmpty -Value (& $getRowValue -Row $row -ColumnName 'ReferencedServer'))
@@ -3088,6 +3089,11 @@ ORDER BY
                 $resolvedReferencedObject = $referencedLocalObject
             }
 
+            $referencedFullName = $resolvedReferencedObject
+            if (-not [string]::IsNullOrWhiteSpace($resolvedReferencedSchema) -and -not [string]::IsNullOrWhiteSpace($resolvedReferencedObject)) {
+                $referencedFullName = ('{0}.{1}' -f $resolvedReferencedSchema, $resolvedReferencedObject)
+            }
+
             $referencedObjectTypeRaw = & $getRowValue -Row $row -ColumnName 'ReferencedObjectTypeRaw'
             $referencedObjectType = (& $normalizeObjectType -TypeValue $referencedObjectTypeRaw)
 
@@ -3103,12 +3109,14 @@ ORDER BY
                 ReferencingDatabase = $databaseName
                 ReferencingSchema = $referencingSchema
                 ReferencingObject = $referencingObject
+                ReferencingFullName = $referencingFullName
                 ReferencingObjectType = $referencingObjectType
 
                 ReferencedServer = $referencedServerRaw
                 ReferencedDatabase = $referencedDatabaseRaw
                 ReferencedSchema = $resolvedReferencedSchema
                 ReferencedObject = $resolvedReferencedObject
+                ReferencedFullName = $referencedFullName
                 ReferencedObjectType = $referencedObjectType
 
                 IsSchemaBound = $isSchemaBound
