@@ -80,9 +80,10 @@ Current Milestone:
 
 Dependency Visualization Framework
 
-Current Feature:
 
-Generate dependencies.dot
+Current Feature:
+Documentation cleanup and roadmap alignment
+Export-DependenciesDot
 
 Completed Milestones:
 
@@ -97,8 +98,12 @@ Regression Status:
 
 Current Status:
 
-- Sprint 3 complete
-- Sprint 4 ready to begin
+✅ Export-DependenciesDot
+✅ dependencies.dot generated
+✅ Test-FoundationRegression PASS
+✅ Test-DependencyModel PASS
+✅ Shared TestFramework.ps1
+✅ Project Plan updated and reorganized
 
 ## Architectural Rules
 
@@ -706,11 +711,21 @@ Sprint 3 review complete.
 
 ### Sprint 4 - Dependency Visualization
 
-Next sprint.
+Completed:
 
-- Generate DOT
-- Generate SVG
-- Generate HTML report
+- Export-DependenciesDot
+
+Validated By:
+
+- Test-DependencyModel
+
+In Progress:
+
+- Export-DependenciesSvg
+
+Planned:
+
+- Export-DependenciesHtml
 
 ### Sprint 5 - Security
 

@@ -76,7 +76,8 @@ $requiredExporterFunctions = @(
     'Get-DatabaseDependencies',
     'Export-DependenciesCsv',
     'Export-DependenciesJson',
-    'Export-DependencyWarnings'
+    'Export-DependencyWarnings',
+    'Export-DependenciesDot'
 )
 
 $missingExporterFunctions = @(
@@ -399,6 +400,61 @@ Invoke-TestStep -Name 'Export-DependencyWarnings' -ScriptBlock {
             -Message 'Warning report should include None found when no warnings exist.'
 
         Write-TestStatus -Status WARN -Message 'No warning dependencies were found. Warning report contains None found.'
+    }
+}
+
+Invoke-TestStep -Name 'Export-DependenciesDot' -ScriptBlock {
+    if (-not $script:DependenciesLoaded) {
+        Skip-TestStep -Message 'Get-DatabaseDependencies did not complete successfully.'
+    }
+
+    $dotExportResult = Export-DependenciesDot `
+        -Dependencies $script:Dependencies `
+        -OutputFolder $script:ResolvedOutputFolder
+
+    Assert-Condition `
+        -Condition ($null -ne $dotExportResult) `
+        -Message 'Export-DependenciesDot returned null.'
+
+    Assert-Condition `
+        -Condition ($null -ne $dotExportResult.PSObject.Properties['DependencyCount']) `
+        -Message 'Export-DependenciesDot result is missing DependencyCount.'
+
+    Assert-Condition `
+        -Condition ($null -ne $dotExportResult.PSObject.Properties['DotPath']) `
+        -Message 'Export-DependenciesDot result is missing DotPath.'
+
+    $dotPath = [string]$dotExportResult.DotPath
+
+    Assert-Condition `
+        -Condition (-not [string]::IsNullOrWhiteSpace($dotPath)) `
+        -Message 'Export-DependenciesDot returned an empty DotPath.'
+
+    Assert-Condition `
+        -Condition (Test-Path -LiteralPath $dotPath -PathType Leaf) `
+        -Message "DOT file does not exist: $dotPath"
+
+    $dotRawContent = Get-Content -LiteralPath $dotPath -Raw
+
+    Assert-Condition `
+        -Condition (-not [string]::IsNullOrWhiteSpace($dotRawContent)) `
+        -Message "DOT file is empty: $dotPath"
+
+    Assert-Condition `
+        -Condition ($dotRawContent -match [regex]::Escape('digraph Dependencies')) `
+        -Message 'DOT file is missing digraph Dependencies header.'
+
+    if ($script:Dependencies.Count -gt 0) {
+        Assert-Condition `
+            -Condition ($dotRawContent -match [regex]::Escape('->')) `
+            -Message 'DOT file is missing dependency edges while dependencies exist.'
+    }
+    else {
+        Assert-Condition `
+            -Condition ($dotRawContent -match 'digraph\s+Dependencies\s*\{\s*\}') `
+            -Message 'DOT output must contain an empty graph block when dependencies are zero.'
+
+        Write-TestStatus -Status WARN -Message 'No dependencies were returned. DOT export created an empty graph.'
     }
 }
 

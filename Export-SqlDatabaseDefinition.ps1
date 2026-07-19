@@ -3426,6 +3426,108 @@ function Export-DependenciesJson {
     }
 }
 
+function Export-DependenciesDot {
+    <#
+    .SYNOPSIS
+        Exports dependency records to Dependencies\dependencies.dot.
+
+    .DESCRIPTION
+        Writes dependency records returned by Get-DatabaseDependencies to a deterministic
+        DOT graph file for foundational dependency visualization.
+
+    .PARAMETER Dependencies
+        Dependency records to export.
+
+    .PARAMETER OutputFolder
+        Target export folder that will contain the Dependencies subfolder.
+
+    .OUTPUTS
+        System.Management.Automation.PSCustomObject
+    #>
+    [CmdletBinding()]
+    [OutputType([System.Management.Automation.PSCustomObject])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [object[]]$Dependencies,
+
+        [Parameter(Mandatory = $true)]
+        [string]$OutputFolder
+    )
+
+    try {
+        if ($null -eq $Dependencies) {
+            throw [System.InvalidOperationException]::new('Dependencies cannot be null.')
+        }
+
+        if ([string]::IsNullOrWhiteSpace($OutputFolder)) {
+            throw [System.InvalidOperationException]::new('OutputFolder cannot be null, empty, or whitespace.')
+        }
+
+        $resolvedOutputFolder = [System.IO.Path]::GetFullPath($OutputFolder.Trim())
+        if (-not (Test-Path -LiteralPath $resolvedOutputFolder -PathType Container)) {
+            throw [System.InvalidOperationException]::new(("OutputFolder does not exist: {0}" -f $resolvedOutputFolder))
+        }
+
+        Write-ExporterLog -Level Information -Message 'Starting dependencies DOT export'
+
+        $dependencyArray = @($Dependencies)
+        Write-ExporterLog -Level Information -Message ("Dependency count: {0}" -f $dependencyArray.Count)
+
+        $dependenciesFolder = [System.IO.Path]::Combine($resolvedOutputFolder, 'Dependencies')
+        if (-not (Test-Path -LiteralPath $dependenciesFolder -PathType Container)) {
+            New-Item -ItemType Directory -Path $dependenciesFolder -Force | Out-Null
+        }
+
+        $dotPath = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($dependenciesFolder, 'dependencies.dot'))
+        Write-ExporterLog -Level Information -Message ("DOT path: {0}" -f $dotPath)
+
+        $sortedDependencies = @(
+            $dependencyArray |
+                Sort-Object -Property ReferencingFullName, ReferencedFullName
+        )
+
+        $escapeDotLabel = {
+            param(
+                [Parameter(Mandatory = $false)]
+                [object]$Value
+            )
+
+            $label = ''
+            if ($null -ne $Value) {
+                $label = [string]$Value
+            }
+
+            $label = $label.Replace('\\', '\\\\')
+            $label = $label.Replace('"', '\\"')
+            return $label
+        }
+
+        $lines = [System.Collections.Generic.List[string]]::new()
+        $lines.Add('digraph Dependencies {')
+
+        foreach ($dependency in $sortedDependencies) {
+            $fromName = & $escapeDotLabel -Value $dependency.ReferencingFullName
+            $toName = & $escapeDotLabel -Value $dependency.ReferencedFullName
+            $lines.Add(('    "{0}" -> "{1}";' -f $fromName, $toName))
+        }
+
+        $lines.Add('}')
+
+        $dotContent = [string]::Join([Environment]::NewLine, $lines)
+        [System.IO.File]::WriteAllText($dotPath, $dotContent, [System.Text.UTF8Encoding]::new($false))
+
+        Write-ExporterLog -Level Information -Message 'Dependencies DOT export completed'
+
+        return [PSCustomObject]@{
+            DependencyCount = $sortedDependencies.Count
+            DotPath = $dotPath
+        }
+    }
+    catch {
+        throw [System.InvalidOperationException]::new(("Failed to export dependencies DOT. {0}" -f $_.Exception.Message))
+    }
+}
+
 function Export-DependencyWarnings {
     <#
     .SYNOPSIS
