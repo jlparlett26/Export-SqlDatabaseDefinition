@@ -81,7 +81,7 @@ Current Milestone:
 Security Export Framework
 
 Current Feature:
-Export-Users
+Export-Permissions
 
 Completed Milestones:
 
@@ -99,9 +99,10 @@ Regression Status:
 Current Status:
 
 ✅ Export-Roles complete
+✅ Export-Users complete
 ✅ Security\Roles.sql generated
+✅ Security\Users.sql generated
 ✅ Test-SecurityRegression PASS
-✅ Sprint 5 Phase 1 complete
 
 ## Architectural Rules
 
@@ -381,8 +382,8 @@ Security\
 Status:
 
 - Roles.sql: implemented
-- Users.sql: in progress
-- Permissions.sql: in progress
+- Users.sql: implemented
+- Permissions.sql: remaining
 
 Primary use case:
 
@@ -769,6 +770,7 @@ Recommended Build Order:
 Completed:
 
 - Export-Roles
+- Export-Users
 
 Validated By:
 
@@ -776,11 +778,11 @@ Validated By:
 
 In Progress:
 
-- Export-Users
+- Export-Permissions
 
 Planned:
 
-- Export-Permissions
+- Security permission analysis (future if applicable)
 
 Validation Strategy:
 
@@ -790,11 +792,12 @@ Each security export should produce deterministic output.
 
 Lessons Learned:
 
-Security exports follow the same deterministic,
-one-file-per-artifact pattern used throughout the exporter.
+Security exports continue to follow the
+deterministic one-file-per-artifact design used
+throughout the exporter.
 
-Test-SecurityRegression should be extended for all future
-security export features.
+Test-SecurityRegression remains the authoritative
+validation suite for Sprint 5 work.
 
 ### Sprint 6 - Reference Data
 

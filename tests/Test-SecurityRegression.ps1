@@ -278,6 +278,33 @@ Invoke-TestStep -Name 'Validate Users Export' -ScriptBlock {
         -Condition (-not [string]::IsNullOrWhiteSpace($usersRawContent)) `
         -Message "Users.sql is empty: $script:UsersPath"
 
+    $usersFileBytes = [System.IO.File]::ReadAllBytes($script:UsersPath)
+
+    Assert-Condition `
+        -Condition ($usersFileBytes.Length -gt 0) `
+        -Message "Users.sql contains no bytes: $script:UsersPath"
+
+    $hasUtf8Bom = $false
+    if ($usersFileBytes.Length -ge 3) {
+        $hasUtf8Bom = (
+            ($usersFileBytes[0] -eq 0xEF) -and
+            ($usersFileBytes[1] -eq 0xBB) -and
+            ($usersFileBytes[2] -eq 0xBF)
+        )
+    }
+
+    Assert-Condition `
+        -Condition (-not $hasUtf8Bom) `
+        -Message 'Users.sql is encoded with a UTF-8 BOM. Expected UTF-8 without BOM.'
+
+    try {
+        $strictUtf8 = [System.Text.UTF8Encoding]::new($false, $true)
+        [void]$strictUtf8.GetString($usersFileBytes)
+    }
+    catch {
+        throw 'Users.sql is not valid UTF-8 encoded text.'
+    }
+
     $userCount = [int]$script:UsersExportResult.UserCount
 
     if ($userCount -gt 0) {

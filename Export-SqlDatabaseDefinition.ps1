@@ -2975,7 +2975,7 @@ function Export-Users {
         )
 
         Write-ExporterLog -Level Information -Message ("User count: {0}" -f $userDefinedUsers.Count)
-        Write-ExporterLog -Level Information -Message ("Output path: {0}" -f $usersPath)
+        Write-ExporterLog -Level Information -Message ("Output file: {0}" -f $usersPath)
 
         $lines = [System.Collections.Generic.List[string]]::new()
 
