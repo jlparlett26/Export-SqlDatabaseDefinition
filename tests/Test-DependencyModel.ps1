@@ -54,6 +54,7 @@ $script:Dependencies = @()
 $script:ProfilePath = $null
 $script:ResolvedOutputFolder = $null
 $script:DependenciesLoaded = $false
+$script:SvgExportResult = $null
 $script:ProjectRoot = Split-Path -Parent $PSScriptRoot
 $script:ExporterScriptPath = Join-Path $script:ProjectRoot 'Export-SqlDatabaseDefinition.ps1'
 $testFrameworkPath = Join-Path $PSScriptRoot 'TestFramework.ps1'
@@ -74,6 +75,7 @@ $requiredExporterFunctions = @(
     'Read-ExportProfile',
     'Connect-SqlDatabase',
     'Get-DatabaseDependencies',
+    'Get-GraphvizDotPath',
     'Export-DependenciesCsv',
     'Export-DependenciesJson',
     'Export-DependencyWarnings',
@@ -118,8 +120,36 @@ Invoke-TestStep -Name 'Setup Dependency Test Context' -ScriptBlock {
         -Message 'Get-DatabaseDependencies function was not loaded.'
 
     Assert-Condition `
+        -Condition ($null -ne (Get-Command -Name Get-GraphvizDotPath -ErrorAction SilentlyContinue)) `
+        -Message 'Get-GraphvizDotPath function was not loaded.'
+
+    Assert-Condition `
         -Condition ($null -ne (Get-Command -Name Export-DependenciesCsv -ErrorAction SilentlyContinue)) `
         -Message 'Export-DependenciesCsv function was not loaded.'
+}
+
+Invoke-TestStep -Name 'Graphviz Detection' -ScriptBlock {
+    $graphvizDotPath = Get-GraphvizDotPath
+
+    if ([string]::IsNullOrWhiteSpace($graphvizDotPath)) {
+        Write-TestStatus -Status INFO -Message 'Graphviz not installed'
+        Skip-TestStep -Message 'Graphviz not installed; Graphviz detection test is informational only.'
+    }
+
+    Assert-Condition `
+        -Condition (Test-Path -LiteralPath $graphvizDotPath -PathType Leaf) `
+        -Message ("Graphviz dot path does not exist: {0}" -f $graphvizDotPath)
+
+    Assert-Condition `
+        -Condition ([System.IO.Path]::GetFileName($graphvizDotPath) -ieq 'dot.exe') `
+        -Message ("Graphviz path does not point to dot.exe: {0}" -f $graphvizDotPath)
+
+    if ($graphvizDotPath -like 'C:\Program Files\Graphviz\bin\dot.exe' -or $graphvizDotPath -like 'C:\Program Files (x86)\Graphviz\bin\dot.exe') {
+        Write-TestStatus -Status INFO -Message 'Graphviz found via fallback location'
+    }
+    else {
+        Write-TestStatus -Status INFO -Message 'Graphviz found via PATH'
+    }
 }
 
 Invoke-TestStep -Name 'Read-ExportProfile' -ScriptBlock {
@@ -477,6 +507,8 @@ Invoke-TestStep -Name 'Export-DependenciesSvg' -ScriptBlock {
     try {
         $svgExportResult = Export-DependenciesSvg `
             -OutputFolder $script:ResolvedOutputFolder
+
+        $script:SvgExportResult = $svgExportResult
     }
     catch {
         $errorMessage = [string]$_.Exception.Message
@@ -526,6 +558,97 @@ Invoke-TestStep -Name 'Export-DependenciesSvg' -ScriptBlock {
     Assert-Condition `
         -Condition ($svgRawContent -match '<svg') `
         -Message 'SVG file does not contain <svg.'
+}
+
+Invoke-TestStep -Name 'Export-DependenciesHtml' -ScriptBlock {
+    if (-not $script:DependenciesLoaded) {
+        Skip-TestStep -Message 'Get-DatabaseDependencies did not complete successfully.'
+    }
+
+    if (-not (Get-Command -Name Export-DependenciesHtml -ErrorAction SilentlyContinue)) {
+        Skip-TestStep -Message 'Export-DependenciesHtml function was not found.'
+    }
+
+    if ($null -eq $script:SvgExportResult) {
+        Write-TestStatus -Status WARN -Message 'Export-DependenciesSvg did not produce a result. Skipping HTML generation test.'
+        Skip-TestStep -Message 'Export-DependenciesSvg did not produce a result. Run Export-DependenciesSvg before Export-DependenciesHtml.'
+    }
+
+    $svgPath = $null
+    if ($null -ne $script:SvgExportResult -and $null -ne $script:SvgExportResult.PSObject.Properties['SvgPath']) {
+        $svgPath = [string]$script:SvgExportResult.SvgPath
+    }
+
+    if ([string]::IsNullOrWhiteSpace($svgPath)) {
+        $svgPath = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($script:ResolvedOutputFolder, 'Dependencies', 'dependencies.svg'))
+    }
+
+    if (-not (Test-Path -LiteralPath $svgPath -PathType Leaf)) {
+        Write-TestStatus -Status WARN -Message 'dependencies.svg was not found. Skipping HTML generation test.'
+        Skip-TestStep -Message 'dependencies.svg was not found. Run Export-DependenciesSvg before Export-DependenciesHtml.'
+    }
+
+    $htmlExportResult = Export-DependenciesHtml `
+        -Dependencies $script:Dependencies `
+        -OutputFolder $script:ResolvedOutputFolder `
+        -SvgPath $svgPath
+
+    Assert-Condition `
+        -Condition ($null -ne $htmlExportResult) `
+        -Message 'Export-DependenciesHtml returned null.'
+
+    foreach ($propertyName in @('DependencyCount', 'HtmlPath', 'SvgPath', 'Generated')) {
+        Assert-Condition `
+            -Condition ($null -ne $htmlExportResult.PSObject.Properties[$propertyName]) `
+            -Message ("Export-DependenciesHtml result is missing {0}." -f $propertyName)
+    }
+
+    $htmlPath = [string]$htmlExportResult.HtmlPath
+    $returnedSvgPath = [string]$htmlExportResult.SvgPath
+
+    Assert-Condition `
+        -Condition (-not [string]::IsNullOrWhiteSpace($htmlPath)) `
+        -Message 'Export-DependenciesHtml returned an empty HtmlPath.'
+
+    Assert-Condition `
+        -Condition (Test-Path -LiteralPath $htmlPath -PathType Leaf) `
+        -Message "HTML file does not exist: $htmlPath"
+
+    $htmlRawContent = Get-Content -LiteralPath $htmlPath -Raw
+
+    Assert-Condition `
+        -Condition (-not [string]::IsNullOrWhiteSpace($htmlRawContent)) `
+        -Message "HTML file is empty: $htmlPath"
+
+    Assert-Condition `
+        -Condition ($htmlRawContent -match '<html') `
+        -Message 'HTML file does not contain <html.'
+
+    Assert-Condition `
+        -Condition ($htmlRawContent -match [regex]::Escape('SQL Dependency Visualization Report')) `
+        -Message 'HTML file does not contain the report title.'
+
+    Assert-Condition `
+        -Condition ($htmlRawContent -match '<svg') `
+        -Message 'HTML file does not contain <svg.'
+
+    Assert-Condition `
+        -Condition ($htmlRawContent -match [regex]::Escape('Total Dependencies')) `
+        -Message 'HTML file does not contain Total Dependencies.'
+
+    foreach ($relatedFileName in @('dependencies.csv', 'dependencies.json', 'dependency-warnings.md', 'dependencies.dot', 'dependencies.svg')) {
+        Assert-Condition `
+            -Condition ($htmlRawContent -match [regex]::Escape($relatedFileName)) `
+            -Message ("HTML file does not reference {0}." -f $relatedFileName)
+    }
+
+    Assert-Condition `
+        -Condition (-not [string]::IsNullOrWhiteSpace($returnedSvgPath)) `
+        -Message 'Export-DependenciesHtml returned an empty SvgPath.'
+
+    Assert-Condition `
+        -Condition (Test-Path -LiteralPath $returnedSvgPath -PathType Leaf) `
+        -Message "Returned SVG file does not exist: $returnedSvgPath"
 }
 
 Invoke-TestStep -Name 'Dependency Object Shape' -ScriptBlock {

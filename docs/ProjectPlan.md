@@ -74,21 +74,22 @@ PSScriptAnalyzer exceptions are accepted by design:
 
 Current Sprint:
 
-Sprint 4 - Dependency Visualization
+Sprint 5 - Security
 
 Current Milestone:
 
-Dependency Visualization Framework
+Security Export Framework
 
 
 Current Feature:
-Export-DependenciesSvg
+Export-Roles
 
 Completed Milestones:
 
 - Foundation
 - Core Object Export
 - Dependency Data Export
+- Dependency Visualization
 
 Regression Status:
 
@@ -97,15 +98,16 @@ Regression Status:
 
 Current Status:
 
-✅ Export-DependenciesDot
-✅ dependencies.dot generated
+✅ Sprint 4 complete
+✅ Sprint 5 ready to begin
 ✅ Test-FoundationRegression PASS
 ✅ Test-DependencyModel PASS
-✅ Shared TestFramework.ps1
-✅ Project Plan updated and reorganized
-✅ Documentation cleanup and roadmap alignment
-✅ Export-DependenciesDot
-✅ 
+
+Current Test Results:
+
+- Passed: 15
+- Failed: 0
+- Skipped: 0
 
 ## Architectural Rules
 
@@ -462,7 +464,7 @@ Completed:
 - dependencies.json
 - dependency-warnings.md
 
-Future visualization outputs:
+Completed visualization outputs:
 
 - dependencies.dot
 - dependencies.svg
@@ -591,6 +593,8 @@ Dependencies\
     dependencies.dot
 ```
 
+Status: implemented
+
 DOT is the canonical visualization source.
 
 ### SVG Output
@@ -599,6 +603,8 @@ DOT is the canonical visualization source.
 Dependencies\
     dependencies.svg
 ```
+
+Status: implemented
 
 Benefits:
 
@@ -612,6 +618,8 @@ Benefits:
 Dependencies\
     dependencies.html
 ```
+
+Status: implemented
 
 Include:
 
@@ -717,20 +725,54 @@ Completed:
 
 - Export-DependenciesDot
 - Export-DependenciesSvg
+- Export-DependenciesHtml
+- Graphviz detection improvements
 
 Validated By:
 
 - Test-DependencyModel
 
-In Progress:
+Retrospective:
 
-- Export-DependenciesHtml
+The visualization framework is functional and validated.
+The generated outputs satisfy current requirements but
+are considered an initial implementation.
+
+Future visualization improvements remain deferred to
+later roadmap phases.
 
 ### Sprint 5 - Security
 
-- Export roles
-- Export users
-- Export permissions
+Sprint 5 Startup Notes:
+
+Sprint 5 Goal:
+
+Export SQL Server security artifacts.
+
+Planned Outputs:
+
+```text
+Security\
+    Roles.sql
+
+Security\
+    Users.sql
+
+Security\
+    Permissions.sql
+```
+
+Recommended Build Order:
+
+1. Export-Roles
+2. Export-Users
+3. Export-Permissions
+
+Validation Strategy:
+
+Extend existing regression testing.
+
+Each security export should produce deterministic output.
 
 ### Sprint 6 - Reference Data
 

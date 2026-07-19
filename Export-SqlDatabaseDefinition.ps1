@@ -2644,6 +2644,52 @@ function Export-SqlDatabaseDefinition {
 #endregion
 
 #region Dependency Functions
+function Get-GraphvizDotPath {
+    <#
+    .SYNOPSIS
+        Resolves the Graphviz dot executable path.
+
+    .DESCRIPTION
+        Looks for dot on PATH first, then checks common Graphviz installation
+        locations on Windows. Returns the full path when found; otherwise returns $null.
+
+    .OUTPUTS
+        System.String
+    #>
+    [CmdletBinding()]
+    param()
+
+    $dotCommand = Get-Command -Name 'dot' -ErrorAction SilentlyContinue
+    if ($null -ne $dotCommand) {
+        $dotPath = $dotCommand.Source
+        if ([string]::IsNullOrWhiteSpace($dotPath)) {
+            $dotPath = $dotCommand.Path
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($dotPath)) {
+            $resolvedDotPath = [System.IO.Path]::GetFullPath($dotPath)
+            Write-ExporterLog -Level Information -Message ("Graphviz found via PATH: {0}" -f $resolvedDotPath)
+            return $resolvedDotPath
+        }
+    }
+
+    $commonDotPaths = @(
+        'C:\Program Files\Graphviz\bin\dot.exe',
+        'C:\Program Files (x86)\Graphviz\bin\dot.exe'
+    )
+
+    foreach ($commonDotPath in $commonDotPaths) {
+        if (Test-Path -LiteralPath $commonDotPath -PathType Leaf) {
+            $resolvedDotPath = [System.IO.Path]::GetFullPath($commonDotPath)
+            Write-ExporterLog -Level Information -Message ("Graphviz found via fallback path: {0}" -f $resolvedDotPath)
+            return $resolvedDotPath
+        }
+    }
+
+    Write-ExporterLog -Level Information -Message 'Graphviz not found'
+    return $null
+}
+
 function Test-ExportDependencies {
     <#
     .SYNOPSIS
@@ -2686,7 +2732,7 @@ function Test-ExportDependencies {
             Name = 'Graphviz'
             Required = $false
             InstallCommand = 'winget install Graphviz.Graphviz'
-            Notes = 'Get-Command dot -ErrorAction SilentlyContinue'
+            Notes = 'Get-GraphvizDotPath'
             Validation = 'dot.exe'
         }
     )
@@ -2769,8 +2815,8 @@ function Test-ExportDependencies {
                 }
             }
             'Graphviz' {
-                $graphvizCommand = Get-Command -Name 'dot' -ErrorAction SilentlyContinue
-                if ($null -ne $graphvizCommand) {
+                $graphvizDotPath = Get-GraphvizDotPath
+                if ($null -ne $graphvizDotPath) {
                     $isInstalled = $true
                     $detail.Installed = $true
                     $detail.Message = 'PASS: Graphviz'
@@ -3596,20 +3642,23 @@ function Export-DependenciesSvg {
             throw [System.InvalidOperationException]::new(("DOT file is empty: {0}" -f $resolvedDotPath))
         }
 
-        $dotCommand = Get-Command -Name 'dot' -ErrorAction SilentlyContinue
-        if ($null -eq $dotCommand) {
+        $dotPath = Get-GraphvizDotPath
+        if ($null -eq $dotPath) {
             $message = @(
-                'Graphviz dot command was not found.',
-                'Install Graphviz and retry:',
+                'Graphviz was not found.',
+                'Searched:',
+                '    PATH',
+                '    C:\Program Files\Graphviz\bin\dot.exe',
+                '    C:\Program Files (x86)\Graphviz\bin\dot.exe',
+                '',
+                'Install:',
                 'winget install Graphviz.Graphviz'
             ) -join [Environment]::NewLine
 
             throw [System.InvalidOperationException]::new($message)
         }
 
-        Write-ExporterLog -Level Information -Message ("Graphviz command found: {0}" -f $dotCommand.Source)
-
-        & $dotCommand.Source '-Tsvg' $resolvedDotPath '-o' $svgPath
+        & $dotPath '-Tsvg' $resolvedDotPath '-o' $svgPath
         $dotExitCode = $LASTEXITCODE
 
         if ($dotExitCode -ne 0) {
@@ -3634,6 +3683,287 @@ function Export-DependenciesSvg {
     }
     catch {
         throw [System.InvalidOperationException]::new(("Failed to export dependencies SVG. {0}" -f $_.Exception.Message))
+    }
+}
+
+function Export-DependenciesHtml {
+    <#
+    .SYNOPSIS
+        Exports dependency visualization HTML to Dependencies\dependencies.html.
+
+    .DESCRIPTION
+        Generates a static HTML report that summarizes dependency metadata and embeds
+        the existing dependency SVG directly into the page body.
+
+    .PARAMETER Dependencies
+        Dependency records to include in the report summary.
+
+    .PARAMETER OutputFolder
+        Target export folder that contains the Dependencies subfolder.
+
+    .PARAMETER SvgPath
+        Optional full path to the SVG file. If omitted, uses
+        <OutputFolder>\Dependencies\dependencies.svg.
+
+    .OUTPUTS
+        System.Management.Automation.PSCustomObject
+    #>
+    [CmdletBinding()]
+    [OutputType([System.Management.Automation.PSCustomObject])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [object[]]$Dependencies,
+
+        [Parameter(Mandatory = $true)]
+        [string]$OutputFolder,
+
+        [Parameter(Mandatory = $false)]
+        [string]$SvgPath
+    )
+
+    try {
+        if ($null -eq $Dependencies) {
+            throw [System.InvalidOperationException]::new('Dependencies cannot be null.')
+        }
+
+        if ([string]::IsNullOrWhiteSpace($OutputFolder)) {
+            throw [System.InvalidOperationException]::new('OutputFolder cannot be null, empty, or whitespace.')
+        }
+
+        $resolvedOutputFolder = [System.IO.Path]::GetFullPath($OutputFolder.Trim())
+        if (-not (Test-Path -LiteralPath $resolvedOutputFolder -PathType Container)) {
+            throw [System.InvalidOperationException]::new(("OutputFolder does not exist: {0}" -f $resolvedOutputFolder))
+        }
+
+        Write-ExporterLog -Level Information -Message 'Starting HTML export'
+
+        $dependencyArray = @($Dependencies)
+        Write-ExporterLog -Level Information -Message ("Dependency count: {0}" -f $dependencyArray.Count)
+
+        $dependenciesFolder = [System.IO.Path]::Combine($resolvedOutputFolder, 'Dependencies')
+        if (-not (Test-Path -LiteralPath $dependenciesFolder -PathType Container)) {
+            throw [System.InvalidOperationException]::new(("Dependencies folder does not exist: {0}" -f $dependenciesFolder))
+        }
+
+        if ([string]::IsNullOrWhiteSpace($SvgPath)) {
+            $resolvedSvgPath = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($dependenciesFolder, 'dependencies.svg'))
+        }
+        else {
+            $resolvedSvgPath = [System.IO.Path]::GetFullPath($SvgPath.Trim())
+        }
+
+        $htmlPath = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($dependenciesFolder, 'dependencies.html'))
+
+        Write-ExporterLog -Level Information -Message ("SVG path: {0}" -f $resolvedSvgPath)
+        Write-ExporterLog -Level Information -Message ("HTML path: {0}" -f $htmlPath)
+
+        if (-not (Test-Path -LiteralPath $resolvedSvgPath -PathType Leaf)) {
+            throw [System.InvalidOperationException]::new((
+                'dependencies.svg was not found.' + [Environment]::NewLine +
+                'Run Export-DependenciesSvg before Export-DependenciesHtml.'
+            ))
+        }
+
+        $svgContent = Get-Content -LiteralPath $resolvedSvgPath -Raw
+        if ([string]::IsNullOrWhiteSpace($svgContent)) {
+            throw [System.InvalidOperationException]::new(("SVG file is empty: {0}" -f $resolvedSvgPath))
+        }
+
+        $escapeHtml = {
+            param(
+                [Parameter(Mandatory = $false)]
+                [object]$Value
+            )
+
+            $text = ''
+            if ($null -ne $Value) {
+                $text = [string]$Value
+            }
+
+            $encoded = [System.Net.WebUtility]::HtmlEncode($text)
+            if ($null -eq $encoded) {
+                return ''
+            }
+
+            return $encoded.Replace("'", '&#39;')
+        }
+
+        $sortedDependencies = @(
+            $dependencyArray |
+                Sort-Object -Property ReferencingFullName, ReferencedFullName
+        )
+
+        $totalDependencies = $sortedDependencies.Count
+        $crossDatabaseReferences = @($sortedDependencies | Where-Object { $_.IsCrossDatabase -eq $true })
+        $crossServerReferences = @($sortedDependencies | Where-Object { $_.IsCrossServer -eq $true })
+        $externalReferences = @($sortedDependencies | Where-Object { $_.IsExternalReference -eq $true })
+        $callerDependentReferences = @($sortedDependencies | Where-Object { $_.IsCallerDependent -eq $true })
+        $ambiguousReferences = @($sortedDependencies | Where-Object { $_.IsAmbiguous -eq $true })
+
+        $relatedFiles = @(
+            'dependencies.csv',
+            'dependencies.json',
+            'dependency-warnings.md',
+            'dependencies.dot',
+            'dependencies.svg'
+        )
+
+        $relatedFilesMarkup = [System.Text.StringBuilder]::new()
+        foreach ($relatedFile in $relatedFiles) {
+            [void]$relatedFilesMarkup.AppendLine(('                <li>{0}</li>' -f (& $escapeHtml -Value $relatedFile)))
+        }
+
+        $summaryRows = @(
+            @('Total Dependencies', $totalDependencies),
+            @('Cross Database References', $crossDatabaseReferences.Count),
+            @('Cross Server References', $crossServerReferences.Count),
+            @('External References', $externalReferences.Count),
+            @('Caller Dependent References', $callerDependentReferences.Count),
+            @('Ambiguous References', $ambiguousReferences.Count)
+        )
+
+        $summaryRowsMarkup = [System.Text.StringBuilder]::new()
+        foreach ($summaryRow in $summaryRows) {
+            [void]$summaryRowsMarkup.AppendLine(('                    <tr><th>{0}</th><td>{1}</td></tr>' -f (& $escapeHtml -Value $summaryRow[0]), (& $escapeHtml -Value $summaryRow[1])))
+        }
+
+        $htmlContent = @'
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SQL Dependency Visualization Report</title>
+    <style>
+        :root {
+            color-scheme: light;
+            --border: #d0d7de;
+            --surface: #ffffff;
+            --subtle: #f6f8fa;
+            --text: #1f2328;
+            --muted: #57606a;
+        }
+        body {
+            margin: 0;
+            padding: 2rem;
+            font-family: Arial, Helvetica, sans-serif;
+            color: var(--text);
+            background: #fafbfc;
+        }
+        main {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(31, 35, 40, 0.08);
+            overflow: hidden;
+        }
+        header, section {
+            padding: 1.5rem 2rem;
+        }
+        header {
+            background: linear-gradient(180deg, #f8fbff 0%, #ffffff 100%);
+            border-bottom: 1px solid var(--border);
+        }
+        h1, h2 {
+            margin: 0 0 1rem 0;
+            line-height: 1.2;
+        }
+        h1 {
+            font-size: 1.8rem;
+        }
+        h2 {
+            font-size: 1.1rem;
+        }
+        .summary-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .summary-table th,
+        .summary-table td {
+            padding: 0.75rem 1rem;
+            border-bottom: 1px solid var(--border);
+            text-align: left;
+        }
+        .summary-table th {
+            width: 60%;
+            background: var(--subtle);
+            font-weight: 600;
+        }
+        .svg-panel {
+            padding: 1rem;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            background: #fff;
+            overflow-x: auto;
+        }
+        .related-files {
+            margin: 0;
+            padding-left: 1.25rem;
+        }
+        .notes {
+            color: var(--muted);
+        }
+        .section-grid {
+            display: grid;
+            gap: 1rem;
+        }
+    </style>
+</head>
+<body>
+    <main>
+        <header>
+            <h1>SQL Dependency Visualization Report</h1>
+            <p>This report summarizes SQL Server dependency metadata and embeds the exported dependency graph.</p>
+        </header>
+        <section>
+            <h2>Summary</h2>
+            <table class="summary-table" aria-label="Dependency summary">
+                <tbody>
+__SUMMARY_ROWS__                </tbody>
+            </table>
+        </section>
+        <section>
+            <h2>Dependency Graph</h2>
+            <div class="svg-panel">
+__SVG_CONTENT__
+            </div>
+        </section>
+        <section class="section-grid">
+            <div>
+                <h2>Related Files</h2>
+                <ul class="related-files">
+__RELATED_FILES__                </ul>
+            </div>
+            <div>
+                <h2>Notes</h2>
+                <p class="notes">The graph is generated from sys.sql_expression_dependencies and represents SQL Server dependency metadata captured by the exporter.</p>
+            </div>
+        </section>
+    </main>
+</body>
+</html>
+'@
+
+        $htmlContent = $htmlContent.Replace('__SUMMARY_ROWS__', $summaryRowsMarkup.ToString())
+        $htmlContent = $htmlContent.Replace('__SVG_CONTENT__', $svgContent)
+        $htmlContent = $htmlContent.Replace('__RELATED_FILES__', $relatedFilesMarkup.ToString())
+
+        [System.IO.File]::WriteAllText($htmlPath, $htmlContent, [System.Text.UTF8Encoding]::new($false))
+
+        Write-ExporterLog -Level Information -Message 'HTML export completed'
+
+        return [PSCustomObject]@{
+            DependencyCount = $totalDependencies
+            HtmlPath        = $htmlPath
+            SvgPath         = $svgPath
+            Generated       = $true
+        }
+    }
+    catch {
+        throw [System.InvalidOperationException]::new(("Failed to export dependencies HTML. {0}" -f $_.Exception.Message))
     }
 }
 
