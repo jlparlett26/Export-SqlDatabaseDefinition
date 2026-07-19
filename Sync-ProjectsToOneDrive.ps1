@@ -40,7 +40,7 @@ $ErrorActionPreference = 'Stop'
 
 $scriptFolder = Split-Path -Parent $MyInvocation.MyCommand.Path
 
-$configPath = Join-Path $scriptFolder '..\local-config.yaml'
+$configPath = Join-Path $scriptFolder '..\Database Code\local-config.yaml'
 $configPath = [System.IO.Path]::GetFullPath($configPath)
 
 if (-not (Test-Path $configPath)) {
