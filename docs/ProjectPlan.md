@@ -793,6 +793,16 @@ Completed Milestones:
 - Query sys.sql_expression_dependencies
 - Return standardized dependency objects
 
+### Sprint 3 Progress
+
+Completed
+
+- Get-DatabaseDependencies
+- ReferencingFullName
+- ReferencedFullName
+- Export-DependenciesCsv
+- Test-DependencyModel
+
 ## Sprint 4 - Dependency Visualization
 
 - Generate DOT
