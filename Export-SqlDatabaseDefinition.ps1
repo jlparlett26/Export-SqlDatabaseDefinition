@@ -2641,6 +2641,216 @@ function Export-SqlDatabaseDefinition {
 #endregion
 
 #region Security Export Functions
+function Export-Roles {
+    <#
+    .SYNOPSIS
+        Exports user-defined database roles to Security\Roles.sql.
+
+    .DESCRIPTION
+        Creates the Security folder when needed and writes deterministic CREATE ROLE
+        statements for user-defined database roles only. Fixed database roles and
+        role memberships are excluded.
+
+    .PARAMETER Connection
+        Connection result returned by Connect-SqlDatabase.
+
+    .PARAMETER OutputFolder
+        Target export folder.
+
+    .OUTPUTS
+        System.Management.Automation.PSCustomObject
+    #>
+    [CmdletBinding()]
+    [OutputType([System.Management.Automation.PSCustomObject])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Connection,
+
+        [Parameter(Mandatory = $true)]
+        [string]$OutputFolder
+    )
+
+    try {
+        if ($null -eq $Connection) {
+            throw [System.InvalidOperationException]::new('Connection cannot be null.')
+        }
+
+        if ($null -eq $Connection.PSObject.Properties['Connected'] -or -not [bool]$Connection.Connected) {
+            throw [System.InvalidOperationException]::new('Connection.Connected must be true.')
+        }
+
+        if ($null -eq $Connection.PSObject.Properties['DatabaseObject'] -or $null -eq $Connection.DatabaseObject) {
+            throw [System.InvalidOperationException]::new('Connection.DatabaseObject cannot be null.')
+        }
+
+        if ([string]::IsNullOrWhiteSpace($OutputFolder)) {
+            throw [System.InvalidOperationException]::new('OutputFolder cannot be null, empty, or whitespace.')
+        }
+
+        $resolvedOutputFolder = [System.IO.Path]::GetFullPath($OutputFolder.Trim())
+        if (-not (Test-Path -LiteralPath $resolvedOutputFolder -PathType Container)) {
+            throw [System.InvalidOperationException]::new(("OutputFolder does not exist: {0}" -f $resolvedOutputFolder))
+        }
+
+        Write-ExporterLog -Level Information -Message 'Starting role export'
+
+        $securityFolder = [System.IO.Path]::Combine($resolvedOutputFolder, 'Security')
+        if (-not (Test-Path -LiteralPath $securityFolder -PathType Container)) {
+            New-Item -ItemType Directory -Path $securityFolder -Force | Out-Null
+        }
+
+        $rolesPath = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($securityFolder, 'Roles.sql'))
+
+        $database = $Connection.DatabaseObject
+        $rawRoles = @()
+        if ($null -ne $database.PSObject.Properties['Roles']) {
+            $rawRoles = @($database.Roles)
+        }
+
+        $fixedRoleNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        foreach ($fixedRoleName in @(
+            'db_owner',
+            'db_datareader',
+            'db_datawriter',
+            'db_ddladmin',
+            'db_securityadmin',
+            'db_accessadmin',
+            'db_backupoperator',
+            'db_denydatareader',
+            'db_denydatawriter',
+            'public'
+        )) {
+            [void]$fixedRoleNames.Add($fixedRoleName)
+        }
+
+        $getRoleProperty = {
+            param(
+                [Parameter(Mandatory = $true)]
+                [object]$Object,
+
+                [Parameter(Mandatory = $true)]
+                [string]$PropertyName
+            )
+
+            try {
+                $property = $Object.PSObject.Properties[$PropertyName]
+                if ($null -eq $property) {
+                    return $null
+                }
+
+                return $property.Value
+            }
+            catch {
+                return $null
+            }
+        }
+
+        $escapeSqlIdentifier = {
+            param(
+                [Parameter(Mandatory = $true)]
+                [string]$Value
+            )
+
+            return ('[{0}]' -f $Value.Replace(']', ']]'))
+        }
+
+        $userDefinedRoles = @(
+            $rawRoles |
+                Where-Object {
+                    if ($null -eq $_) {
+                        return $false
+                    }
+
+                    $roleName = [string](& $getRoleProperty -Object $_ -PropertyName 'Name')
+                    if ([string]::IsNullOrWhiteSpace($roleName)) {
+                        return $false
+                    }
+
+                    if ($fixedRoleNames.Contains($roleName)) {
+                        return $false
+                    }
+
+                    $isFixedRoleProperty = $null
+                    if ($null -ne $_.PSObject.Properties['IsFixedRole']) {
+                        $isFixedRoleProperty = & $getRoleProperty -Object $_ -PropertyName 'IsFixedRole'
+                    }
+
+                    if ($null -ne $isFixedRoleProperty) {
+                        try {
+                            if ([bool]$isFixedRoleProperty) {
+                                return $false
+                            }
+                        }
+                        catch {
+                        }
+                    }
+
+                    return $true
+                } |
+                Sort-Object -Property Name
+        )
+
+        Write-ExporterLog -Level Information -Message ("Role count: {0}" -f $userDefinedRoles.Count)
+        Write-ExporterLog -Level Information -Message ("Output path: {0}" -f $rolesPath)
+
+        $lines = [System.Collections.Generic.List[string]]::new()
+
+        if ($userDefinedRoles.Count -eq 0) {
+            $lines.Add('-- No user-defined database roles found.')
+        }
+        else {
+            for ($roleIndex = 0; $roleIndex -lt $userDefinedRoles.Count; $roleIndex++) {
+                $role = $userDefinedRoles[$roleIndex]
+                $roleName = [string](& $getRoleProperty -Object $role -PropertyName 'Name')
+                $roleOwner = [string](& $getRoleProperty -Object $role -PropertyName 'Owner')
+
+                if ([string]::IsNullOrWhiteSpace($roleOwner)) {
+                    $roleOwner = ''
+                }
+                elseif ($null -ne $role.PSObject.Properties['Owner'] -and $null -ne $role.Owner -and $role.Owner.PSObject.Properties['Name'] -ne $null) {
+                    $roleOwner = [string]$role.Owner.Name
+                }
+
+                $lines.Add(('-- Role Name: {0}' -f $roleName))
+                if (-not [string]::IsNullOrWhiteSpace($roleOwner)) {
+                    $lines.Add(('-- Owner: {0}' -f $roleOwner))
+                }
+
+                $lines.Add('')
+
+                $createRoleStatement = 'CREATE ROLE {0}' -f (& $escapeSqlIdentifier -Value $roleName)
+                if (-not [string]::IsNullOrWhiteSpace($roleOwner)) {
+                    $createRoleStatement += ' AUTHORIZATION {0}' -f (& $escapeSqlIdentifier -Value $roleOwner)
+                }
+
+                $lines.Add($createRoleStatement)
+                $lines.Add('GO')
+
+                if ($roleIndex -lt ($userDefinedRoles.Count - 1)) {
+                    $lines.Add('')
+                }
+            }
+        }
+
+        $roleScript = [string]::Join([Environment]::NewLine, $lines)
+        if (-not $roleScript.EndsWith([Environment]::NewLine)) {
+            $roleScript += [Environment]::NewLine
+        }
+
+        [System.IO.File]::WriteAllText($rolesPath, $roleScript, [System.Text.UTF8Encoding]::new($false))
+
+        Write-ExporterLog -Level Information -Message 'Role export completed'
+
+        return [PSCustomObject]@{
+            RoleCount = $userDefinedRoles.Count
+            RolesPath = $rolesPath
+        }
+    }
+    catch {
+        Write-ExporterLog -Level Error -Message ('Role export failed: {0}' -f $_.Exception.Message) -ErrorAction Continue
+        throw [System.InvalidOperationException]::new(('Failed to export roles. {0}' -f $_.Exception.Message))
+    }
+}
 #endregion
 
 #region Dependency Functions

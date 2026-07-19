@@ -9,7 +9,6 @@ Before generating code:
 
 3. Follow all architectural rules defined in ProjectPlan.md.
 
-
 4. If a code generation request conflicts with ProjectPlan.md:
 
    - Identify the conflict.
