@@ -3336,6 +3336,502 @@ ORDER BY
 }
 #endregion
 
+#region Reference Data Export Functions
+function Export-ReferenceData {
+    <#
+    .SYNOPSIS
+        Exports configured reference table data to one file per table.
+
+    .DESCRIPTION
+        Reads referenceData settings from the export configuration and writes
+        deterministic INSERT statements for configured tables into ReferenceData.
+        Export is optional and disabled by configuration.
+
+    .PARAMETER Config
+        Parsed export configuration dictionary.
+
+    .PARAMETER Connection
+        Connection result returned by Connect-SqlDatabase.
+
+    .PARAMETER OutputFolder
+        Target export folder.
+
+    .OUTPUTS
+        System.Management.Automation.PSCustomObject
+    #>
+    [CmdletBinding()]
+    [OutputType([System.Management.Automation.PSCustomObject])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Collections.IDictionary]$Config,
+
+        [Parameter(Mandatory = $true)]
+        [object]$Connection,
+
+        [Parameter(Mandatory = $true)]
+        [string]$OutputFolder
+    )
+
+    try {
+        if ($null -eq $Config) {
+            throw [System.InvalidOperationException]::new('Config cannot be null.')
+        }
+
+        if ($null -eq $Connection) {
+            throw [System.InvalidOperationException]::new('Connection cannot be null.')
+        }
+
+        if ($null -eq $Connection.PSObject.Properties['Connected'] -or -not [bool]$Connection.Connected) {
+            throw [System.InvalidOperationException]::new('Connection.Connected must be true.')
+        }
+
+        if ($null -eq $Connection.PSObject.Properties['DatabaseObject'] -or $null -eq $Connection.DatabaseObject) {
+            throw [System.InvalidOperationException]::new('Connection.DatabaseObject cannot be null.')
+        }
+
+        if ([string]::IsNullOrWhiteSpace($OutputFolder)) {
+            throw [System.InvalidOperationException]::new('OutputFolder cannot be null, empty, or whitespace.')
+        }
+
+        $resolvedOutputFolder = [System.IO.Path]::GetFullPath($OutputFolder.Trim())
+        if (-not (Test-Path -LiteralPath $resolvedOutputFolder -PathType Container)) {
+            throw [System.InvalidOperationException]::new(("OutputFolder does not exist: {0}" -f $resolvedOutputFolder))
+        }
+
+        if (-not $Config.Contains('referenceData')) {
+            throw [System.InvalidOperationException]::new('Config is missing the referenceData section.')
+        }
+
+        $referenceDataConfig = $Config['referenceData']
+        if ($null -eq $referenceDataConfig -or $referenceDataConfig -isnot [System.Collections.IDictionary]) {
+            throw [System.InvalidOperationException]::new('Config referenceData section is invalid.')
+        }
+
+        Write-ExporterLog -Level Information -Message 'Starting reference data export'
+
+        $enabled = $false
+        if ($referenceDataConfig.Contains('enabled') -and $null -ne $referenceDataConfig['enabled']) {
+            $enabled = [bool]$referenceDataConfig['enabled']
+        }
+
+        if (-not $enabled) {
+            Write-ExporterLog -Level Information -Message 'Reference data export disabled by configuration'
+            return [PSCustomObject]@{
+                Enabled = $false
+                TableCount = 0
+                ExportedFiles = @()
+            }
+        }
+
+        if (-not $referenceDataConfig.Contains('tables')) {
+            throw [System.InvalidOperationException]::new('Config referenceData.tables is missing.')
+        }
+
+        $tablesValue = $referenceDataConfig['tables']
+        if ($null -eq $tablesValue) {
+            throw [System.InvalidOperationException]::new('Config referenceData.tables cannot be null.')
+        }
+
+        if ($tablesValue -is [string]) {
+            throw [System.InvalidOperationException]::new('Config referenceData.tables must be a collection of table names.')
+        }
+
+        if ($tablesValue -is [System.Collections.IDictionary]) {
+            throw [System.InvalidOperationException]::new('Config referenceData.tables must be a collection of table names, not a mapping.')
+        }
+
+        if ($tablesValue -isnot [System.Collections.IEnumerable]) {
+            throw [System.InvalidOperationException]::new('Config referenceData.tables must be a collection of table names.')
+        }
+
+        $configuredTables = [System.Collections.Generic.List[string]]::new()
+        $tableEntryIndex = 0
+        foreach ($tableEntry in $tablesValue) {
+            if ($tableEntry -isnot [string]) {
+                $entryType = if ($null -eq $tableEntry) { 'null' } else { $tableEntry.GetType().FullName }
+                throw [System.InvalidOperationException]::new(("Config referenceData.tables[{0}] must be a non-empty string. Found {1}." -f $tableEntryIndex, $entryType))
+            }
+
+            $tableName = $tableEntry.Trim()
+            if ([string]::IsNullOrWhiteSpace($tableName)) {
+                throw [System.InvalidOperationException]::new(("Config referenceData.tables[{0}] cannot be empty or whitespace." -f $tableEntryIndex))
+            }
+
+            if ($tableName.Contains('*') -or $tableName.Contains('?')) {
+                throw [System.InvalidOperationException]::new(("Wildcard table selection is not supported: {0}" -f $tableName))
+            }
+
+            $configuredTables.Add($tableName)
+            $tableEntryIndex++
+        }
+
+        Write-ExporterLog -Level Information -Message ("Table count requested: {0}" -f $configuredTables.Count)
+
+        $referenceDataFolder = [System.IO.Path]::Combine($resolvedOutputFolder, 'ReferenceData')
+        if (-not (Test-Path -LiteralPath $referenceDataFolder -PathType Container)) {
+            New-Item -ItemType Directory -Path $referenceDataFolder -Force | Out-Null
+        }
+
+        $databaseName = ''
+        if ($null -ne $Connection.PSObject.Properties['DatabaseName'] -and -not [string]::IsNullOrWhiteSpace([string]$Connection.DatabaseName)) {
+            $databaseName = [string]$Connection.DatabaseName
+        }
+        elseif ($null -ne $Connection.DatabaseObject.PSObject.Properties['Name'] -and -not [string]::IsNullOrWhiteSpace([string]$Connection.DatabaseObject.Name)) {
+            $databaseName = [string]$Connection.DatabaseObject.Name
+        }
+
+        if ([string]::IsNullOrWhiteSpace($databaseName)) {
+            throw [System.InvalidOperationException]::new('Database name is unavailable from the connection object.')
+        }
+
+        $serverObject = $null
+        if ($null -ne $Connection.PSObject.Properties['ServerObject'] -and $null -ne $Connection.ServerObject) {
+            $serverObject = $Connection.ServerObject
+        }
+        elseif ($null -ne $Connection.DatabaseObject.PSObject.Properties['Parent']) {
+            $serverObject = $Connection.DatabaseObject.Parent
+        }
+
+        if ($null -eq $serverObject) {
+            throw [System.InvalidOperationException]::new('Connection does not contain a usable SQL Server object for reference data queries.')
+        }
+
+        if ($null -eq $serverObject.PSObject.Properties['ConnectionContext'] -or $null -eq $serverObject.ConnectionContext) {
+            throw [System.InvalidOperationException]::new('SQL Server connection context is unavailable for reference data queries.')
+        }
+
+        $escapeSqlIdentifier = {
+            param(
+                [Parameter(Mandatory = $true)]
+                [string]$Value
+            )
+
+            return ('[{0}]' -f $Value.Replace(']', ']]'))
+        }
+
+        $escapeSqlStringLiteral = {
+            param(
+                [Parameter(Mandatory = $true)]
+                [string]$Value
+            )
+
+            return ("'{0}'" -f $Value.Replace("'", "''"))
+        }
+
+        $parseConfiguredTable = {
+            param(
+                [Parameter(Mandatory = $true)]
+                [string]$Value
+            )
+
+            $inputText = $Value.Trim()
+            if ([string]::IsNullOrWhiteSpace($inputText)) {
+                throw [System.InvalidOperationException]::new('Configured table name cannot be empty.')
+            }
+
+            $schemaName = ''
+            $tableName = ''
+
+            if ($inputText -match '^\[(?<schema>(?:[^\]]|\]\])+)\]\.\[(?<table>(?:[^\]]|\]\])+)\]$') {
+                $schemaName = $matches['schema'].Replace(']]', ']')
+                $tableName = $matches['table'].Replace(']]', ']')
+            }
+            else {
+                $parts = $inputText.Split('.', 2)
+                if ($parts.Count -ne 2) {
+                    throw [System.InvalidOperationException]::new(("Unsupported table format: {0}. Expected [schema].[table] or schema.table." -f $Value))
+                }
+
+                $schemaName = $parts[0].Trim()
+                $tableName = $parts[1].Trim()
+
+                if ($schemaName.StartsWith('[') -and $schemaName.EndsWith(']') -and $schemaName.Length -ge 2) {
+                    $schemaName = $schemaName.Substring(1, $schemaName.Length - 2).Replace(']]', ']')
+                }
+
+                if ($tableName.StartsWith('[') -and $tableName.EndsWith(']') -and $tableName.Length -ge 2) {
+                    $tableName = $tableName.Substring(1, $tableName.Length - 2).Replace(']]', ']')
+                }
+            }
+
+            if ([string]::IsNullOrWhiteSpace($schemaName) -or [string]::IsNullOrWhiteSpace($tableName)) {
+                throw [System.InvalidOperationException]::new(("Configured table must include schema and table names: {0}" -f $Value))
+            }
+
+            return [PSCustomObject]@{
+                Schema = $schemaName
+                Table = $tableName
+                Normalized = ('{0}.{1}' -f $schemaName, $tableName)
+                Bracketed = ('{0}.{1}' -f (& $escapeSqlIdentifier -Value $schemaName), (& $escapeSqlIdentifier -Value $tableName))
+            }
+        }
+
+        $toSqlValue = {
+            param(
+                [Parameter(Mandatory = $false)]
+                [object]$Value
+            )
+
+            if ($null -eq $Value -or $Value -is [System.DBNull]) {
+                return 'NULL'
+            }
+
+            if ($Value -is [bool]) {
+                return $(if ([bool]$Value) { '1' } else { '0' })
+            }
+
+            if ($Value -is [byte[]]) {
+                if ($Value.Length -eq 0) {
+                    return '0x'
+                }
+
+                $hex = [System.BitConverter]::ToString($Value).Replace('-', '')
+                return ('0x{0}' -f $hex)
+            }
+
+            if ($Value -is [datetimeoffset]) {
+                return (& $escapeSqlStringLiteral -Value $Value.ToString('o', [System.Globalization.CultureInfo]::InvariantCulture))
+            }
+
+            if ($Value -is [datetime]) {
+                return (& $escapeSqlStringLiteral -Value $Value.ToString('yyyy-MM-ddTHH:mm:ss.fffffff', [System.Globalization.CultureInfo]::InvariantCulture))
+            }
+
+            if ($Value -is [timespan]) {
+                return (& $escapeSqlStringLiteral -Value $Value.ToString())
+            }
+
+            if ($Value -is [guid]) {
+                return (& $escapeSqlStringLiteral -Value $Value.ToString())
+            }
+
+            if (
+                $Value -is [byte] -or
+                $Value -is [sbyte] -or
+                $Value -is [int16] -or
+                $Value -is [uint16] -or
+                $Value -is [int32] -or
+                $Value -is [uint32] -or
+                $Value -is [int64] -or
+                $Value -is [uint64] -or
+                $Value -is [single] -or
+                $Value -is [double] -or
+                $Value -is [decimal]
+            ) {
+                return [System.Convert]::ToString($Value, [System.Globalization.CultureInfo]::InvariantCulture)
+            }
+
+            if ($Value -is [char]) {
+                return (& $escapeSqlStringLiteral -Value ([string]$Value))
+            }
+
+            if ($Value -is [string]) {
+                return (& $escapeSqlStringLiteral -Value $Value)
+            }
+
+            if ($Value -is [System.IFormattable]) {
+                $formatted = $Value.ToString($null, [System.Globalization.CultureInfo]::InvariantCulture)
+                return (& $escapeSqlStringLiteral -Value $formatted)
+            }
+
+            $fallback = [string]$Value
+            return (& $escapeSqlStringLiteral -Value $fallback)
+        }
+
+        $getSafeFileName = {
+            param(
+                [Parameter(Mandatory = $true)]
+                [string]$Value
+            )
+
+            $invalidChars = [System.IO.Path]::GetInvalidFileNameChars()
+            $escapedInvalidChars = (($invalidChars | ForEach-Object { [Regex]::Escape([string]$_) }) -join '')
+            if ([string]::IsNullOrEmpty($escapedInvalidChars)) {
+                return $Value
+            }
+
+            return [Regex]::Replace($Value, ("[{0}]" -f $escapedInvalidChars), '_')
+        }
+
+        $exportedFiles = [System.Collections.Generic.List[string]]::new()
+        $configuredTableCount = $configuredTables.Count
+
+        foreach ($configuredTable in $configuredTables) {
+            $parsedTable = & $parseConfiguredTable -Value $configuredTable
+
+            Write-ExporterLog -Level Information -Message ("Exporting table: {0}" -f $parsedTable.Bracketed)
+
+            $metadataQuery = @"
+SELECT
+    c.name AS ColumnName,
+    c.column_id AS ColumnId,
+    c.is_computed AS IsComputed,
+    CASE WHEN pk.column_id IS NULL THEN 0 ELSE 1 END AS IsPrimaryKey,
+    pk.key_ordinal AS PrimaryKeyOrdinal
+FROM sys.columns AS c
+LEFT JOIN (
+    SELECT
+        ic.object_id,
+        ic.column_id,
+        ic.key_ordinal
+    FROM sys.indexes AS i
+    INNER JOIN sys.index_columns AS ic
+        ON i.object_id = ic.object_id
+        AND i.index_id = ic.index_id
+    WHERE i.is_primary_key = 1
+) AS pk
+    ON pk.object_id = c.object_id
+    AND pk.column_id = c.column_id
+WHERE c.object_id = OBJECT_ID(N'{0}')
+ORDER BY c.column_id;
+"@ -f $parsedTable.Bracketed
+
+            $metadataExecuteQuery = "USE {0};{1}{2}" -f (& $escapeSqlIdentifier -Value $databaseName), [Environment]::NewLine, $metadataQuery
+            $metadataResult = $serverObject.ConnectionContext.ExecuteWithResults($metadataExecuteQuery)
+
+            $metadataRows = @()
+            if ($null -ne $metadataResult -and $null -ne $metadataResult.Tables -and $metadataResult.Tables.Count -gt 0) {
+                $metadataRows = @($metadataResult.Tables[0].Rows)
+            }
+
+            if ($metadataRows.Count -eq 0) {
+                throw [System.InvalidOperationException]::new(("Configured reference table was not found: {0}" -f $parsedTable.Bracketed))
+            }
+
+            $insertableColumns = @(
+                $metadataRows |
+                    Where-Object { [int]$_.IsComputed -eq 0 } |
+                    Sort-Object -Property ColumnId
+            )
+
+            $selectedColumnNames = @(
+                $insertableColumns |
+                    ForEach-Object { [string]$_.ColumnName }
+            )
+
+            $pkColumns = @(
+                $insertableColumns |
+                    Where-Object { [int]$_.IsPrimaryKey -eq 1 } |
+                    Sort-Object -Property PrimaryKeyOrdinal, ColumnId |
+                    ForEach-Object { [string]$_.ColumnName }
+            )
+
+            $orderByColumns = @()
+            if ($pkColumns.Count -gt 0) {
+                $orderByColumns = @($pkColumns)
+            }
+            elseif ($selectedColumnNames.Count -gt 0) {
+                $orderByColumns = @($selectedColumnNames | Sort-Object)
+            }
+
+            $safeFileName = & $getSafeFileName -Value ('{0}.{1}.sql' -f $parsedTable.Schema, $parsedTable.Table)
+            $tableOutputPath = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($referenceDataFolder, $safeFileName))
+
+            $lines = [System.Collections.Generic.List[string]]::new()
+            $lines.Add(("-- Table: {0}" -f $parsedTable.Bracketed))
+
+            $rowCount = 0
+
+            if ($selectedColumnNames.Count -eq 0) {
+                $lines.Add('-- No rows exported.')
+                $lines.Add('-- No insertable columns found (all columns are computed).')
+            }
+            else {
+                $selectColumnsSql = ($selectedColumnNames | ForEach-Object { & $escapeSqlIdentifier -Value $_ }) -join ', '
+                $orderBySql = ''
+                if ($orderByColumns.Count -gt 0) {
+                    $orderBySql = (' ORDER BY {0}' -f (($orderByColumns | ForEach-Object { & $escapeSqlIdentifier -Value $_ }) -join ', '))
+                }
+
+                $dataQuery = "SELECT {0} FROM {1}{2};" -f $selectColumnsSql, $parsedTable.Bracketed, $orderBySql
+                $dataExecuteQuery = "USE {0};{1}{2}" -f (& $escapeSqlIdentifier -Value $databaseName), [Environment]::NewLine, $dataQuery
+
+                $dataResult = $serverObject.ConnectionContext.ExecuteWithResults($dataExecuteQuery)
+                $dataRows = @()
+                if ($null -ne $dataResult -and $null -ne $dataResult.Tables -and $dataResult.Tables.Count -gt 0) {
+                    $dataRows = @($dataResult.Tables[0].Rows)
+                }
+
+                $rowCount = $dataRows.Count
+
+                if ($rowCount -eq 0) {
+                    $lines.Add('-- No rows exported.')
+                }
+                else {
+                    $insertHeader = ("INSERT INTO {0}" -f $parsedTable.Bracketed)
+                    $columnLines = $selectedColumnNames | ForEach-Object { "    {0}" -f (& $escapeSqlIdentifier -Value $_) }
+
+                    foreach ($dataRow in $dataRows) {
+                        $valueLines = @()
+                        foreach ($columnName in $selectedColumnNames) {
+                            $cellValue = $null
+                            if ($null -ne $dataRow.Table -and $dataRow.Table.Columns.Contains($columnName)) {
+                                $cellValue = $dataRow[$columnName]
+                            }
+
+                            $valueLines += ("    {0}" -f (& $toSqlValue -Value $cellValue))
+                        }
+
+                        $lines.Add($insertHeader)
+                        $lines.Add('(')
+                        for ($columnIndex = 0; $columnIndex -lt $columnLines.Count; $columnIndex++) {
+                            if ($columnIndex -lt ($columnLines.Count - 1)) {
+                                $lines.Add(($columnLines[$columnIndex] + ','))
+                            }
+                            else {
+                                $lines.Add($columnLines[$columnIndex])
+                            }
+                        }
+                        $lines.Add(')')
+                        $lines.Add('VALUES')
+                        $lines.Add('(')
+                        for ($valueIndex = 0; $valueIndex -lt $valueLines.Count; $valueIndex++) {
+                            if ($valueIndex -lt ($valueLines.Count - 1)) {
+                                $lines.Add(($valueLines[$valueIndex] + ','))
+                            }
+                            else {
+                                $lines.Add($valueLines[$valueIndex])
+                            }
+                        }
+                        $lines.Add(');')
+                        $lines.Add('GO')
+                        $lines.Add('')
+                    }
+
+                    if ($lines.Count -gt 0 -and [string]::IsNullOrEmpty($lines[$lines.Count - 1])) {
+                        [void]$lines.RemoveAt($lines.Count - 1)
+                    }
+                }
+            }
+
+            $fileContent = [string]::Join([Environment]::NewLine, $lines)
+            if (-not $fileContent.EndsWith([Environment]::NewLine)) {
+                $fileContent += [Environment]::NewLine
+            }
+
+            [System.IO.File]::WriteAllText($tableOutputPath, $fileContent, [System.Text.UTF8Encoding]::new($false))
+            $exportedFiles.Add($tableOutputPath)
+
+            Write-ExporterLog -Level Information -Message ("Row count for {0}: {1}" -f $parsedTable.Bracketed, $rowCount)
+            Write-ExporterLog -Level Information -Message ("Output path: {0}" -f $tableOutputPath)
+            Write-ExporterLog -Level Information -Message ("Table exported: {0}" -f $parsedTable.Bracketed)
+        }
+
+        Write-ExporterLog -Level Information -Message 'Reference data export completed'
+
+        return [PSCustomObject]@{
+            Enabled = $true
+            TableCount = $configuredTableCount
+            ExportedFiles = @($exportedFiles)
+        }
+    }
+    catch {
+        Write-ExporterLog -Level Error -Message ('Reference data export failed: {0}' -f $_.Exception.Message) -ErrorAction Continue
+        throw [System.InvalidOperationException]::new(('Failed to export reference data. {0}' -f $_.Exception.Message))
+    }
+}
+#endregion
+
 #region Dependency Functions
 function Get-GraphvizDotPath {
     <#

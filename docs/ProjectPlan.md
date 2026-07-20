@@ -81,7 +81,7 @@ Current Milestone:
 Reference Data Framework
 
 Current Feature:
-Reference Data Design Review
+Export-ReferenceData
 
 Completed Milestones:
 
@@ -101,7 +101,7 @@ Current Status:
 
 ✅ Sprint 5 complete
 ✅ Security export complete
-✅ Test-SecurityRegression PASS
+✅ Sprint 6 design decisions documented
 
 Current Test Status:
 
@@ -396,6 +396,63 @@ Primary use case:
 ### Reference Data Export
 
 Reference data export is optional.
+
+Reference data export is controlled entirely through YAML.
+
+Tables must be explicitly listed.
+
+Wildcard table selection is not supported.
+
+Automatic discovery of reference tables is not supported.
+
+Preferred YAML format:
+
+```yaml
+referenceData:
+    enabled: true
+    tables:
+        - "[dbo].[tblUSDBannerSecurityArchive_TEMP]"
+```
+
+Table names may be stored in bracketed schema-qualified format:
+
+```text
+[schema].[table]
+```
+
+Output format is one file per table.
+
+Example output:
+
+```text
+ReferenceData\
+        dbo.tblUSDBannerSecurityArchive_TEMP.sql
+```
+
+Version 1 generates INSERT statements only.
+
+Version 1 does not generate MERGE statements.
+
+Version 1 does not generate TRUNCATE statements.
+
+If a configured table contains zero rows, the exporter still creates the file.
+
+Example:
+
+```text
+-- Table: [dbo].[SomeLookupTable]
+-- No rows exported.
+```
+
+Row ordering must be deterministic.
+
+Preferred ordering:
+
+Primary key order when available.
+
+Fallback ordering:
+
+All columns ascending when no primary key exists.
 
 Examples:
 
@@ -808,8 +865,6 @@ implementation and validation.
 
 ### Sprint 6 - Reference Data
 
-Sprint 6 Startup Notes:
-
 Sprint 6 Goal:
 
 Export selected reference data from configured tables.
@@ -827,7 +882,14 @@ Reference Data Design Principles:
 - Explicit table selection
 - Deterministic output
 - One file per table
+- No wildcard table selection
 - No automatic table discovery
+- Bracketed [schema].[table] entries supported
+- INSERT statements only in Version 1
+- No MERGE statements in Version 1
+- No TRUNCATE statements in Version 1
+- Empty configured tables still produce output files
+- Primary key ordering preferred; otherwise all columns ascending
 
 Recommended Build Order:
 
@@ -836,8 +898,17 @@ Recommended Build Order:
 3. Export-ReferenceData
 4. Reference Data Regression Testing
 
-- Export lookup tables
-- YAML controlled configuration
+Completed:
+
+- Reference Data Design Review
+
+In Progress:
+
+- Export-ReferenceData
+
+Planned:
+
+- Reference data regression testing
 
 ### Sprint 7 - Profiles
 
@@ -926,7 +997,11 @@ Report:
 - Mixed naming standards
 - MS SQL Coding standards
 - Joins, Right outer, Left outer used
- -Joins producing a cartesian result
+- Joins producing a cartesian result
+- empty tables
+- empty views
+- views that return an error
+- objects that have a space in the name
 
 Output:
 
