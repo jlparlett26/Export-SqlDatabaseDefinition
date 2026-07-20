@@ -74,14 +74,18 @@ PSScriptAnalyzer exceptions are accepted by design:
 
 Current Sprint:
 
-Sprint 6 - Reference Data
+Sprint 7 - Configuration Evolution
+
+Sprint 7 Status:
+
+Active
 
 Current Milestone:
 
-Reference Data Framework
+Configuration Evolution Design Review
 
 Current Feature:
-Export-ReferenceData
+Configuration Versioning Review
 
 Completed Milestones:
 
@@ -90,18 +94,20 @@ Completed Milestones:
 - Dependency Data Export
 - Dependency Visualization
 - Security Export
+- Reference Data Export
 
 Regression Status:
 
 - Test-FoundationRegression PASS
 - Test-DependencyModel PASS
 - Test-SecurityRegression PASS
+- Test-ReferenceDataRegression PASS
 
 Current Status:
 
-✅ Sprint 5 complete
-✅ Security export complete
-✅ Sprint 6 design decisions documented
+✅ Sprint 6 complete
+✅ Reference Data export complete
+✅ Sprint 7 profile implementation paused pending design review
 
 Current Test Status:
 
@@ -397,7 +403,7 @@ Primary use case:
 
 Reference data export is optional.
 
-Reference data export is controlled entirely through YAML.
+Reference data export is controlled entirely through export.yaml.
 
 Tables must be explicitly listed.
 
@@ -873,7 +879,7 @@ Planned Outputs:
 
 ```text
 ReferenceData\
-    <TableName>.sql
+    dbo.tblUSDBannerSecurityArchive_TEMP.sql
 ```
 
 Reference Data Design Principles:
@@ -901,19 +907,72 @@ Recommended Build Order:
 Completed:
 
 - Reference Data Design Review
+- Export-ReferenceData
+- Test-ReferenceDataRegression
 
 In Progress:
 
-- Export-ReferenceData
+- None
 
 Planned:
 
-- Reference data regression testing
+- None
 
-### Sprint 7 - Profiles
+Validated By:
 
-- Named profiles
-- Configuration upgrades
+- Test-ReferenceDataRegression
+
+Status:
+
+Sprint 6 complete.
+
+### Sprint 7 - Configuration Evolution
+
+Sprint 7 Goal:
+
+Evolve configuration safely while preserving deterministic, file-based workflows.
+
+Planned Features:
+
+- Configuration Versioning
+- Configuration Upgrades
+- Backward Compatibility
+
+Recommended Build Order:
+
+1. Configuration Versioning Review
+2. Configuration Upgrade Framework
+3. Backward Compatibility Validation
+
+Design Review Notes:
+
+- Profile implementation is intentionally paused.
+- The current architecture already supports DEV, TEST, and PROD through separate export folders.
+- Each export folder contains its own export.yaml, exportinfo.json, export.log, and exported artifacts.
+- Future profile development should proceed only if requirements are identified that cannot be solved through folder-based environment management.
+
+Design Question:
+
+Do profiles solve a real problem that export folders do not?
+
+Current Conclusion:
+
+Existing export folders may already provide the environment separation originally expected from named profiles.
+
+Additional profile abstractions should not be implemented unless a clear unmet requirement is identified.
+
+Known Design Principles:
+
+- Remain YAML-based
+- Remain deterministic
+- Avoid breaking existing export.yaml files
+- Preserve backward compatibility whenever practical
+
+Lessons Learned:
+
+Folder-based environment management may provide a simpler and more maintainable solution than an explicit profile framework.
+
+The project should continue favoring simple, deterministic, file-based solutions unless a more complex abstraction provides clear value.
 
 ### Sprint 8 - Polish
 
