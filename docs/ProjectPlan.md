@@ -1,3 +1,4 @@
+
 # Export-SqlDatabaseDefinition
 
 ## Project Vision
@@ -74,18 +75,18 @@ PSScriptAnalyzer exceptions are accepted by design:
 
 Current Sprint:
 
-Sprint 7 - Configuration Evolution
+Sprint 8 - Database Code Analysis
 
-Sprint 7 Status:
+Sprint 8 Status:
 
 Active
 
 Current Milestone:
 
-Configuration Evolution Design Review
+
 
 Current Feature:
-Configuration Versioning Review
+
 
 Completed Milestones:
 
@@ -107,7 +108,9 @@ Current Status:
 
 ✅ Sprint 6 complete
 ✅ Reference Data export complete
-✅ Sprint 7 profile implementation paused pending design review
+✅ Sprint 7 Configuration Evolution paused
+✅ Named Profiles not currently necessary
+✅ Next active work is Database Code Analysis
 
 Current Test Status:
 
@@ -926,41 +929,6 @@ Status:
 
 Sprint 6 complete.
 
-### Sprint 7 - Configuration Evolution
-
-Sprint 7 Goal:
-
-Evolve configuration safely while preserving deterministic, file-based workflows.
-
-Planned Features:
-
-- Configuration Versioning
-- Configuration Upgrades
-- Backward Compatibility
-
-Recommended Build Order:
-
-1. Configuration Versioning Review
-2. Configuration Upgrade Framework
-3. Backward Compatibility Validation
-
-Design Review Notes:
-
-- Profile implementation is intentionally paused.
-- The current architecture already supports DEV, TEST, and PROD through separate export folders.
-- Each export folder contains its own export.yaml, exportinfo.json, export.log, and exported artifacts.
-- Future profile development should proceed only if requirements are identified that cannot be solved through folder-based environment management.
-
-Design Question:
-
-Do profiles solve a real problem that export folders do not?
-
-Current Conclusion:
-
-Existing export folders may already provide the environment separation originally expected from named profiles.
-
-Additional profile abstractions should not be implemented unless a clear unmet requirement is identified.
-
 Known Design Principles:
 
 - Remain YAML-based
@@ -968,51 +936,170 @@ Known Design Principles:
 - Avoid breaking existing export.yaml files
 - Preserve backward compatibility whenever practical
 
-Lessons Learned:
+### Sprint 7 - Configuration Evolution
+
+Status:
+
+Paused / Deferred
 
 Folder-based environment management may provide a simpler and more maintainable solution than an explicit profile framework.
 
-The project should continue favoring simple, deterministic, file-based solutions unless a more complex abstraction provides clear value.
 
-### Sprint 8 - Polish
+Sprint 7 Goal:
+
+Evolve configuration safely when real schema evolution needs exist.
+
+Planned Features:
+
+- Configuration Versioning
+- Configuration Upgrades
+- Backward Compatibility
+
+Design Review Notes:
+
+- Named Profiles are currently not necessary.
+- The current export-folder model already supports DEV, TEST, and PROD through separate folders.
+
+Example:
+
+    D:\Exports\DEV\BannerSecurity\
+    D:\Exports\TEST\BannerSecurity\
+    D:\Exports\PROD\BannerSecurity\
+
+Each folder contains its own:
+
+    export.yaml
+    exportinfo.json
+    export.log
+    exported artifacts
+
+Design Question:
+
+Do profiles solve a real problem that export folders do not?
+
+Current Conclusion:
+
+Not currently.
+
+Profile implementation should remain paused unless a future requirement is identified that cannot be solved through folder-based environment management.
+
+Configuration Evolution should resume only when a real configVersion change or backward-compatibility issue exists.
+
+Sprint 7 remains deferred until a real configuration schema change requires versioning, upgrades, or backward-compatibility handling.
+
+Named Profiles are not currently planned because separate export folders already solve the DEV/TEST/PROD environment separation problem.
+
+
+### Sprint 8 - Database Health Analysis
+
+- Missing Index Recommendations
+- Index Health Analysis
+- View Optimization Analysis
+- Deprecated Feature Analysis
+- Upgrade Readiness Report
+- Foreign Key Trust Analysis
+- Constraint Health Analysis
+- Security Risk Analysis
+
+- Tables without primary keys
+- Non-standard constraint names
+- Generic index names
+- Objects using reserved words
+- Objects with spaces
+- Mixed naming standards
+- MS SQL Coding standards
+- Joins, Right outer, Left outer used
+- Joins producing a cartesian result
+- empty tables
+- empty views
+- views that return an error
+- objects that have a space in the name
+
+#### Naming Convention Analysis
+needed: NamingStandards.md
+Output:
+
+```text
+Analysis\
+    NamingStandards.md
+```
+
+### Sprint 9 - Database Code Analysis
+
+Sprint 8 Purpose:
+
+Add reports that make exported database code more useful during DBA review.
+
+Planned Analysis Scope:
+
+- Naming Convention Analysis
+- Tables without primary keys
+- Non-standard constraint names
+- Generic index names
+- Objects using reserved words
+- Objects with spaces
+- Mixed naming standards
+- MS SQL Coding standards
+- Joins, Right outer, Left outer used
+- Joins producing a cartesian result
+- empty tables
+- empty views
+- views that return an error
+- objects that have a space in the name
+- Orphaned Object Analysis
+- Change Impact Analysis
+
+
+### Sprint 10 - Dependency Visualization Improvements
+
+Sprint 9 Purpose:
+
+Improve the usefulness of the existing DOT/SVG/HTML outputs for actual DBA code review.
+
+Planned Improvements:
 
 - Dependency filtering
 - Large graph handling
-- Git integration
+- Color coding
+- Tables = Blue
+- Views = Green
+- Procedures = Orange
+- Functions = Purple
+- External References = Red
+- Graph usability improvements
+
+Current State Note:
+
+The current visualization outputs are functional and validated but are considered initial implementations. Future work should make them more actionable for database code review.
+
+
+
+### Sprint 11 - Exporter Reliability and Developer Experience
+
 - Detect dot-sourcing and avoid automatic execution.
 - Allow developers to load functions without running the exporter.
-- Generate dependency report from Test-ExportDependencies
-- Export dependency status to exportinfo.json
-- Known cosmetic defect: Read-ExportProfile validation report formatting
-- Test-ExportProfile: decide if necessary
+- Read-ExportProfile validation report formatting.
+- Test-ExportProfile: decide if necessary.
+- TestFramework.ps1 consolidation if not already fully complete.
+
+### Sprint 12 - Export Metadata and Reporting
+
+- Generate dependency report from Test-ExportDependencies.
+- Export dependency status to exportinfo.json.
+- Git integration.
+
+Lessons Learned:
+
+The project should continue favoring simple, deterministic, file-based solutions unless a more complex abstraction provides clear value.
 
 ## Known Issues
 
 - Read-ExportProfile currently reports validation failures correctly but does not properly render the detailed validation list.
 - The validation logic is correct.
 - Only the formatting of the error report needs improvement.
-- Deferred to Sprint 8.
+- Deferred to Sprint 11.
 
 ## Future Enhancements
-
-### Test Framework Consolidation
-
-Create:
-
-```text
-tests\TestFramework.ps1
-```
-
-Purpose:
-
-- Shared Write-TestStatus
-- Shared Assert-Condition
-- Shared Invoke-TestStep
-
-Consumers:
-
-- Test-FoundationRegression.ps1
-- Test-DependencyModel.ps1
 
 ### SSMS Integration
 
@@ -1038,36 +1125,11 @@ Support explicit parameters for automation.
 
 ## Future Analysis Features Wishlist
 
-These features are intentionally outside the MVP scope.
+These features are intentionally outside the MVP scope unless promoted into planned roadmap sprints.
 
 They may require additional SQL queries, performance data, or analysis beyond object export.
 
 These items should not influence current architecture unless they can be implemented cleanly after the core exporter is complete.
-
-### Naming Convention Analysis
-
-Report:
-
-- Tables without primary keys
-- Non-standard constraint names
-- Generic index names
-- Objects using reserved words
-- Objects with spaces
-- Mixed naming standards
-- MS SQL Coding standards
-- Joins, Right outer, Left outer used
-- Joins producing a cartesian result
-- empty tables
-- empty views
-- views that return an error
-- objects that have a space in the name
-
-Output:
-
-```text
-Analysis\
-    NamingStandards.md
-```
 
 ### Script Updates
 
@@ -1119,6 +1181,9 @@ The first release is complete when it can:
 - Generate export log
 - Export dependency data
 - Generate dependency visualizations
+
+Status:
+MVP Complete
 
 ## Example Export
 
