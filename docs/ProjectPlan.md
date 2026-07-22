@@ -83,10 +83,7 @@ Active
 
 Current Milestone:
 
-
-
 Current Feature:
-
 
 Completed Milestones:
 
@@ -1032,6 +1029,55 @@ Add reports that make exported database code more useful during DBA review.
 
 Planned Analysis Scope:
 
+####  Orphaned Object Analysis - Analysis Framework
+
+- Complete
+
+Dependency-Based Objects - Dependency-Based Candidates
+- Views
+- Procedures
+- Functions
+- Triggers
+- Synonyms
+
+Unused Views
+Unused Procedures
+Unused Functions
+Unused Synonyms
+
+Security Objects - Security Candidates
+- Roles
+- Users
+- Permissions
+
+Roles Without Members
+Users Without Roles
+Permissions Assigned To Unused Principals
+
+Reference Data - Data Candidates
+- Reference Data
+
+Empty Reference Tables
+Reference Tables Not Configured For Export
+
+Invoke-OrphanedObjectAnalysis
+
+    Analyze-DependencyObjects
+
+    Analyze-SecurityObjects
+
+    Analyze-ReferenceData
+
+Analysis\
+    OrphanedObjects.md
+
+Analysis\
+    SecurityAnalysis.md
+
+Analysis\
+    ReferenceDataHealth.md
+
+
 - Naming Convention Analysis
 - Tables without primary keys
 - Non-standard constraint names
@@ -1046,7 +1092,7 @@ Planned Analysis Scope:
 - empty views
 - views that return an error
 - objects that have a space in the name
-- Orphaned Object Analysis
+
 - Change Impact Analysis
 
 

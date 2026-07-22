@@ -3832,6 +3832,892 @@ ORDER BY c.column_id;
 }
 #endregion
 
+#region Analysis Functions
+function Export-OrphanedObjectsReport {
+    <#
+    .SYNOPSIS
+        Exports an orphaned object analysis report to Analysis\OrphanedObjects.md.
+
+    .DESCRIPTION
+        Creates a conservative markdown report that highlights review candidates based on
+        dependency metadata, security metadata, and optionally configured reference data tables.
+
+    .PARAMETER Connection
+        Connection result returned by Connect-SqlDatabase.
+
+    .PARAMETER Dependencies
+        Dependency records returned by Get-DatabaseDependencies.
+
+    .PARAMETER OutputFolder
+        Target export folder.
+
+    .PARAMETER Config
+        Parsed export configuration dictionary.
+
+    .OUTPUTS
+        System.Management.Automation.PSCustomObject
+    #>
+    [CmdletBinding()]
+    [OutputType([System.Management.Automation.PSCustomObject])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Connection,
+
+        [Parameter(Mandatory = $true)]
+        [object[]]$Dependencies,
+
+        [Parameter(Mandatory = $true)]
+        [string]$OutputFolder,
+
+        [Parameter(Mandatory = $false)]
+        [System.Collections.IDictionary]$Config
+    )
+
+    try {
+        if ($null -eq $Connection) {
+            throw [System.InvalidOperationException]::new('Connection cannot be null.')
+        }
+
+        if ($null -eq $Connection.PSObject.Properties['Connected'] -or -not [bool]$Connection.Connected) {
+            throw [System.InvalidOperationException]::new('Connection.Connected must be true.')
+        }
+
+        if ($null -eq $Connection.PSObject.Properties['DatabaseObject'] -or $null -eq $Connection.DatabaseObject) {
+            throw [System.InvalidOperationException]::new('Connection.DatabaseObject cannot be null.')
+        }
+
+        if ($null -eq $Dependencies) {
+            throw [System.InvalidOperationException]::new('Dependencies cannot be null.')
+        }
+
+        if ([string]::IsNullOrWhiteSpace($OutputFolder)) {
+            throw [System.InvalidOperationException]::new('OutputFolder cannot be null, empty, or whitespace.')
+        }
+
+        $resolvedOutputFolder = [System.IO.Path]::GetFullPath($OutputFolder.Trim())
+        if (-not (Test-Path -LiteralPath $resolvedOutputFolder -PathType Container)) {
+            throw [System.InvalidOperationException]::new(("OutputFolder does not exist: {0}" -f $resolvedOutputFolder))
+        }
+
+        Write-ExporterLog -Level Information -Message 'Starting orphaned object analysis'
+
+        $analysisFolder = [System.IO.Path]::Combine($resolvedOutputFolder, 'Analysis')
+        if (-not (Test-Path -LiteralPath $analysisFolder -PathType Container)) {
+            New-Item -ItemType Directory -Path $analysisFolder -Force | Out-Null
+        }
+
+        $reportPath = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($analysisFolder, 'OrphanedObjects.md'))
+        $database = $Connection.DatabaseObject
+        $dependencyArray = @($Dependencies)
+
+        $getPropertyValue = {
+            param(
+                [Parameter(Mandatory = $true)]
+                [object]$Object,
+
+                [Parameter(Mandatory = $true)]
+                [string]$PropertyName
+            )
+
+            try {
+                $property = $Object.PSObject.Properties[$PropertyName]
+                if ($null -eq $property) {
+                    return $null
+                }
+
+                return $property.Value
+            }
+            catch {
+                return $null
+            }
+        }
+
+        $getBooleanProperty = {
+            param(
+                [Parameter(Mandatory = $true)]
+                [object]$Object,
+
+                [Parameter(Mandatory = $true)]
+                [string]$PropertyName
+            )
+
+            try {
+                $property = $Object.PSObject.Properties[$PropertyName]
+                if ($null -eq $property -or $null -eq $property.Value) {
+                    return $false
+                }
+
+                return [bool]$property.Value
+            }
+            catch {
+                return $false
+            }
+        }
+
+        $buildFullName = {
+            param(
+                [Parameter(Mandatory = $false)]
+                [string]$SchemaName,
+
+                [Parameter(Mandatory = $false)]
+                [string]$ObjectName
+            )
+
+            $schemaValue = ''
+            if ($null -ne $SchemaName) {
+                $schemaValue = $SchemaName.Trim()
+            }
+
+            $objectValue = ''
+            if ($null -ne $ObjectName) {
+                $objectValue = $ObjectName.Trim()
+            }
+
+            if (-not [string]::IsNullOrWhiteSpace($schemaValue) -and -not [string]::IsNullOrWhiteSpace($objectValue)) {
+                return ('{0}.{1}' -f $schemaValue, $objectValue)
+            }
+
+            if (-not [string]::IsNullOrWhiteSpace($objectValue)) {
+                return $objectValue
+            }
+
+            if (-not [string]::IsNullOrWhiteSpace($schemaValue)) {
+                return $schemaValue
+            }
+
+            return ''
+        }
+
+        $getNormalizedFullName = {
+            param(
+                [Parameter(Mandatory = $false)]
+                [string]$SchemaName,
+
+                [Parameter(Mandatory = $false)]
+                [string]$ObjectName
+            )
+
+            $fullName = & $buildFullName -SchemaName $SchemaName -ObjectName $ObjectName
+            if ([string]::IsNullOrWhiteSpace($fullName)) {
+                return ''
+            }
+
+            return $fullName.Trim()
+        }
+
+        $escapeSqlIdentifier = {
+            param(
+                [Parameter(Mandatory = $true)]
+                [string]$Value
+            )
+
+            return ('[{0}]' -f $Value.Replace(']', ']]'))
+        }
+
+        $incomingDependencyNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        foreach ($dependency in $dependencyArray) {
+            if ($null -eq $dependency) {
+                continue
+            }
+
+            $referencedSchema = [string](& $getPropertyValue -Object $dependency -PropertyName 'ReferencedSchema')
+            $referencedObject = [string](& $getPropertyValue -Object $dependency -PropertyName 'ReferencedObject')
+            $referencedFullName = [string](& $getPropertyValue -Object $dependency -PropertyName 'ReferencedFullName')
+
+            if ([string]::IsNullOrWhiteSpace($referencedFullName)) {
+                $referencedFullName = & $getNormalizedFullName -SchemaName $referencedSchema -ObjectName $referencedObject
+            }
+            else {
+                $referencedFullName = $referencedFullName.Trim()
+            }
+
+            if (-not [string]::IsNullOrWhiteSpace($referencedFullName)) {
+                [void]$incomingDependencyNames.Add($referencedFullName)
+            }
+        }
+
+        $databaseCodeObjects = [System.Collections.Generic.List[object]]::new()
+
+        $addDatabaseObjects = {
+            param(
+                [Parameter(Mandatory = $true)]
+                [AllowEmptyCollection()]
+                [object[]]$Objects,
+
+                [Parameter(Mandatory = $true)]
+                [string]$ObjectType,
+
+                [Parameter(Mandatory = $true)]
+                [string]$SectionName,
+
+                [Parameter(Mandatory = $true)]
+                [string]$CategoryOrder
+            )
+
+            $normalizedObjects = @($Objects)
+            if ($normalizedObjects.Count -eq 0) {
+                return
+            }
+
+            foreach ($object in $normalizedObjects) {
+                if ($null -eq $object) {
+                    continue
+                }
+
+                if (& $getBooleanProperty -Object $object -PropertyName 'IsSystemObject') {
+                    continue
+                }
+
+                if (& $getBooleanProperty -Object $object -PropertyName 'IsSystem') {
+                    continue
+                }
+
+                $schemaName = [string](& $getPropertyValue -Object $object -PropertyName 'Schema')
+                $objectName = [string](& $getPropertyValue -Object $object -PropertyName 'Name')
+
+                if ([string]::IsNullOrWhiteSpace($objectName)) {
+                    continue
+                }
+
+                $normalizedFullName = & $getNormalizedFullName -SchemaName $schemaName -ObjectName $objectName
+                if ([string]::IsNullOrWhiteSpace($normalizedFullName)) {
+                    continue
+                }
+
+                $databaseCodeObjects.Add([PSCustomObject]@{
+                    CategoryOrder = $CategoryOrder
+                    SectionName = $SectionName
+                    ObjectType = $ObjectType
+                    ObjectName = $normalizedFullName
+                    Reason = 'No incoming dependency references found.'
+                    Note = $null
+                    Scope = [string](& $getPropertyValue -Object $object -PropertyName 'Scope')
+                })
+            }
+        }
+
+        $triggerObjects = [System.Collections.Generic.List[object]]::new()
+        foreach ($databaseTrigger in @($database.Triggers)) {
+            if ($null -eq $databaseTrigger) {
+                continue
+            }
+
+            $triggerObjects.Add($databaseTrigger)
+        }
+
+        $userTables = @(
+            @($database.Tables) |
+                Where-Object {
+                    $null -ne $_ -and
+                    -not [string]::IsNullOrWhiteSpace([string]$_.Schema) -and
+                    -not [string]::IsNullOrWhiteSpace([string]$_.Name) -and
+                    ([string]$_.Schema -ine 'sys') -and
+                    ([string]$_.Schema -ine 'INFORMATION_SCHEMA') -and
+                    (-not (& $getBooleanProperty -Object $_ -PropertyName 'IsSystemObject'))
+                }
+        )
+
+        foreach ($table in $userTables) {
+            foreach ($tableTrigger in @($table.Triggers)) {
+                if ($null -eq $tableTrigger) {
+                    continue
+                }
+
+                if (& $getBooleanProperty -Object $tableTrigger -PropertyName 'IsSystemObject') {
+                    continue
+                }
+
+                if (& $getBooleanProperty -Object $tableTrigger -PropertyName 'IsSystem') {
+                    continue
+                }
+
+                if ([string]::IsNullOrWhiteSpace([string]$tableTrigger.Name)) {
+                    continue
+                }
+
+                $schemaName = [string](& $getPropertyValue -Object $tableTrigger -PropertyName 'Schema')
+                if ([string]::IsNullOrWhiteSpace($schemaName)) {
+                    $schemaName = [string]$table.Schema
+                }
+
+                $triggerObjects.Add([PSCustomObject]@{
+                    Schema = $schemaName
+                    Name = [string]$tableTrigger.Name
+                    IsSystemObject = $false
+                    IsSystem = $false
+                })
+            }
+        }
+
+        & $addDatabaseObjects -Objects @($database.Views) -ObjectType 'VIEW' -SectionName 'Potential Orphans' -CategoryOrder '1'
+        & $addDatabaseObjects -Objects @($database.UserDefinedFunctions) -ObjectType 'FUNCTION' -SectionName 'Potential Orphans' -CategoryOrder '1'
+        & $addDatabaseObjects -Objects @($database.Synonyms) -ObjectType 'SYNONYM' -SectionName 'Potential Orphans' -CategoryOrder '1'
+        & $addDatabaseObjects -Objects @($triggerObjects) -ObjectType 'TRIGGER' -SectionName 'Potential Orphans' -CategoryOrder '1'
+        & $addDatabaseObjects -Objects @($database.StoredProcedures) -ObjectType 'PROCEDURE' -SectionName 'External Usage Unknown' -CategoryOrder '2'
+
+        foreach ($candidate in @($databaseCodeObjects)) {
+            $candidate.ObjectName = [string]$candidate.ObjectName
+            if ($candidate.ObjectType -eq 'PROCEDURE') {
+                $candidate.Note = 'Stored procedures may be called by applications, SQL Agent jobs, reports, or scripts.'
+            }
+            elseif ($candidate.ObjectType -eq 'TRIGGER') {
+                $candidate.Note = 'Trigger activity may still be driven by table events or database-level DDL.'
+            }
+
+            $candidate.Reason = [string]$candidate.Reason
+        }
+
+        $dependencyCandidates = [System.Collections.Generic.List[object]]::new()
+        foreach ($candidate in @($databaseCodeObjects | Sort-Object -Property CategoryOrder, ObjectType, ObjectName)) {
+            if ($null -eq $candidate) {
+                continue
+            }
+
+            $incomingMatch = $incomingDependencyNames.Contains([string]$candidate.ObjectName)
+            if ($incomingMatch) {
+                continue
+            }
+
+            $dependencyCandidates.Add($candidate)
+        }
+
+        $dependencyPotentialOrphans = @(
+            $dependencyCandidates |
+                Where-Object { $_.SectionName -eq 'Potential Orphans' } |
+                Sort-Object -Property ObjectType, ObjectName
+        )
+
+        $dependencyExternalUsageUnknown = @(
+            $dependencyCandidates |
+                Where-Object { $_.SectionName -eq 'External Usage Unknown' } |
+                Sort-Object -Property ObjectType, ObjectName
+        )
+
+        $securityCandidates = [System.Collections.Generic.List[object]]::new()
+        $securityAnalysisLimited = $false
+
+        $databaseName = ''
+        if ($null -ne $Connection.PSObject.Properties['DatabaseName'] -and -not [string]::IsNullOrWhiteSpace([string]$Connection.DatabaseName)) {
+            $databaseName = [string]$Connection.DatabaseName
+        }
+        elseif ($null -ne $database.PSObject.Properties['Name'] -and -not [string]::IsNullOrWhiteSpace([string]$database.Name)) {
+            $databaseName = [string]$database.Name
+        }
+
+        $serverObject = $null
+        if ($null -ne $Connection.PSObject.Properties['ServerObject'] -and $null -ne $Connection.ServerObject) {
+            $serverObject = $Connection.ServerObject
+        }
+        elseif ($null -ne $database.PSObject.Properties['Parent']) {
+            $serverObject = $database.Parent
+        }
+
+        $connectionContext = $null
+        if ($null -ne $serverObject -and $null -ne $serverObject.PSObject.Properties['ConnectionContext']) {
+            $connectionContext = $serverObject.ConnectionContext
+        }
+
+        $getRowValue = {
+            param(
+                [Parameter(Mandatory = $true)]
+                [object]$Row,
+
+                [Parameter(Mandatory = $true)]
+                [string]$ColumnName
+            )
+
+            if ($null -eq $Row -or $null -eq $Row.Table -or -not $Row.Table.Columns.Contains($ColumnName)) {
+                return $null
+            }
+
+            $value = $Row[$ColumnName]
+            if ($null -eq $value -or $value -is [System.DBNull]) {
+                return $null
+            }
+
+            return $value
+        }
+
+        $executeQuery = {
+            param(
+                [Parameter(Mandatory = $true)]
+                [string]$QueryText
+            )
+
+            if ($null -eq $connectionContext -or [string]::IsNullOrWhiteSpace($databaseName)) {
+                return $null
+            }
+
+            $sql = "USE {0};{1}{2}" -f (& $escapeSqlIdentifier -Value $databaseName), [Environment]::NewLine, $QueryText
+            try {
+                return $connectionContext.ExecuteWithResults($sql)
+            }
+            catch {
+                return $null
+            }
+        }
+
+        if ($null -ne $connectionContext -and -not [string]::IsNullOrWhiteSpace($databaseName)) {
+            $securityRoleQuery = @"
+SELECT
+    rp.name AS PrincipalName,
+    COALESCE(memberCounts.MemberCount, 0) AS MemberCount,
+    COALESCE(permissionCounts.PermissionCount, 0) AS PermissionCount
+FROM sys.database_principals AS rp
+LEFT JOIN (
+    SELECT role_principal_id, COUNT(1) AS MemberCount
+    FROM sys.database_role_members
+    GROUP BY role_principal_id
+) AS memberCounts
+    ON memberCounts.role_principal_id = rp.principal_id
+LEFT JOIN (
+    SELECT grantee_principal_id, COUNT(1) AS PermissionCount
+    FROM sys.database_permissions
+    GROUP BY grantee_principal_id
+) AS permissionCounts
+    ON permissionCounts.grantee_principal_id = rp.principal_id
+WHERE rp.type = 'R'
+    AND rp.is_fixed_role = 0
+    AND rp.name <> 'public'
+ORDER BY rp.name;
+"@
+
+            $securityUserQuery = @"
+SELECT
+    dp.name AS PrincipalName,
+    dp.type_desc AS PrincipalType,
+    COALESCE(roleMembershipCounts.RoleMembershipCount, 0) AS RoleMembershipCount,
+    COALESCE(permissionCounts.PermissionCount, 0) AS PermissionCount
+FROM sys.database_principals AS dp
+LEFT JOIN (
+    SELECT member_principal_id, COUNT(1) AS RoleMembershipCount
+    FROM sys.database_role_members
+    GROUP BY member_principal_id
+) AS roleMembershipCounts
+    ON roleMembershipCounts.member_principal_id = dp.principal_id
+LEFT JOIN (
+    SELECT grantee_principal_id, COUNT(1) AS PermissionCount
+    FROM sys.database_permissions
+    GROUP BY grantee_principal_id
+) AS permissionCounts
+    ON permissionCounts.grantee_principal_id = dp.principal_id
+WHERE dp.principal_id > 4
+    AND dp.type IN ('S', 'U', 'G', 'E', 'X', 'C')
+    AND dp.name NOT IN ('dbo', 'guest', 'INFORMATION_SCHEMA', 'sys')
+ORDER BY dp.name;
+"@
+
+            $securityRoleResult = & $executeQuery -QueryText $securityRoleQuery
+            $securityUserResult = & $executeQuery -QueryText $securityUserQuery
+
+            if ($null -eq $securityRoleResult -or $null -eq $securityUserResult) {
+                $securityAnalysisLimited = $true
+            }
+
+            if ($null -ne $securityRoleResult -and $null -ne $securityRoleResult.Tables -and $securityRoleResult.Tables.Count -gt 0) {
+                foreach ($row in @($securityRoleResult.Tables[0].Rows)) {
+                    $principalName = [string](& $getRowValue -Row $row -ColumnName 'PrincipalName')
+                    if ([string]::IsNullOrWhiteSpace($principalName)) {
+                        continue
+                    }
+
+                    $memberCount = 0
+                    try {
+                        $memberCount = [int](& $getRowValue -Row $row -ColumnName 'MemberCount')
+                    }
+                    catch {
+                        $memberCount = 0
+                    }
+
+                    $permissionCount = 0
+                    try {
+                        $permissionCount = [int](& $getRowValue -Row $row -ColumnName 'PermissionCount')
+                    }
+                    catch {
+                        $permissionCount = 0
+                    }
+
+                    if ($memberCount -eq 0 -and $permissionCount -eq 0) {
+                        $securityCandidates.Add([PSCustomObject]@{
+                            SectionName = 'Roles'
+                            CategoryOrder = '1'
+                            ObjectType = 'ROLE'
+                            ObjectName = $principalName.Trim()
+                            Reason = 'No members and no obvious permissions were found.'
+                            Note = $null
+                        })
+                    }
+                }
+            }
+            else {
+                $securityAnalysisLimited = $true
+            }
+
+            if ($null -ne $securityUserResult -and $null -ne $securityUserResult.Tables -and $securityUserResult.Tables.Count -gt 0) {
+                foreach ($row in @($securityUserResult.Tables[0].Rows)) {
+                    $principalName = [string](& $getRowValue -Row $row -ColumnName 'PrincipalName')
+                    if ([string]::IsNullOrWhiteSpace($principalName)) {
+                        continue
+                    }
+
+                    $roleMembershipCount = 0
+                    try {
+                        $roleMembershipCount = [int](& $getRowValue -Row $row -ColumnName 'RoleMembershipCount')
+                    }
+                    catch {
+                        $roleMembershipCount = 0
+                    }
+
+                    $permissionCount = 0
+                    try {
+                        $permissionCount = [int](& $getRowValue -Row $row -ColumnName 'PermissionCount')
+                    }
+                    catch {
+                        $permissionCount = 0
+                    }
+
+                    if ($roleMembershipCount -eq 0 -and $permissionCount -eq 0) {
+                        $securityCandidates.Add([PSCustomObject]@{
+                            SectionName = 'Users'
+                            CategoryOrder = '2'
+                            ObjectType = 'USER'
+                            ObjectName = $principalName.Trim()
+                            Reason = 'No role memberships and no obvious direct permissions were found.'
+                            Note = $null
+                        })
+                    }
+                }
+            }
+            else {
+                $securityAnalysisLimited = $true
+            }
+        }
+        else {
+            $securityAnalysisLimited = $true
+        }
+
+        $securityRoles = @(
+            $securityCandidates |
+                Where-Object { $_.SectionName -eq 'Roles' } |
+                Sort-Object -Property ObjectType, ObjectName
+        )
+
+        $securityUsers = @(
+            $securityCandidates |
+                Where-Object { $_.SectionName -eq 'Users' } |
+                Sort-Object -Property ObjectType, ObjectName
+        )
+
+        $referenceDataCandidates = [System.Collections.Generic.List[object]]::new()
+        $referenceDataAnalysisPerformed = $false
+        $referenceDataAnalysisLimited = $false
+
+        if ($null -ne $Config -and $Config.Contains('referenceData')) {
+            $referenceDataConfig = $Config['referenceData']
+            if ($null -ne $referenceDataConfig -and $referenceDataConfig -is [System.Collections.IDictionary]) {
+                $referenceDataEnabled = $false
+                if ($referenceDataConfig.Contains('enabled') -and $null -ne $referenceDataConfig['enabled']) {
+                    $referenceDataEnabled = [bool]$referenceDataConfig['enabled']
+                }
+
+                if ($referenceDataEnabled -and $referenceDataConfig.Contains('tables')) {
+                    $referenceDataAnalysisPerformed = $true
+                    $tablesValue = $referenceDataConfig['tables']
+                    if ($null -ne $tablesValue -and $tablesValue -isnot [string] -and $tablesValue -isnot [System.Collections.IDictionary] -and $tablesValue -is [System.Collections.IEnumerable]) {
+                        $configuredTables = [System.Collections.Generic.List[string]]::new()
+                        foreach ($tableEntry in $tablesValue) {
+                            if ($tableEntry -isnot [string]) {
+                                $referenceDataAnalysisLimited = $true
+                                continue
+                            }
+
+                            $tableName = $tableEntry.Trim()
+                            if ([string]::IsNullOrWhiteSpace($tableName)) {
+                                $referenceDataAnalysisLimited = $true
+                                continue
+                            }
+
+                            if ($tableName.Contains('*') -or $tableName.Contains('?')) {
+                                $referenceDataAnalysisLimited = $true
+                                continue
+                            }
+
+                            $configuredTables.Add($tableName)
+                        }
+                        if ($configuredTables.Count -gt 0) {
+                            $parseConfiguredTable = {
+                                param(
+                                    [Parameter(Mandatory = $true)]
+                                    [string]$Value
+                                )
+
+                                $inputText = $Value.Trim()
+                                if ([string]::IsNullOrWhiteSpace($inputText)) {
+                                    throw [System.InvalidOperationException]::new('Configured table name cannot be empty.')
+                                }
+
+                                $schemaName = ''
+                                $tableName = ''
+
+                                if ($inputText -match '^\[(?<schema>(?:[^\]]|\]\])+)
+\]\.\[(?<table>(?:[^\]]|\]\])+)
+\]$') {
+                                    $schemaName = $matches['schema'].Replace(']]', ']')
+                                    $tableName = $matches['table'].Replace(']]', ']')
+                                }
+                                else {
+                                    $parts = $inputText.Split('.', 2)
+                                    if ($parts.Count -ne 2) {
+                                        throw [System.InvalidOperationException]::new(("Unsupported table format: {0}. Expected [schema].[table] or schema.table." -f $Value))
+                                    }
+
+                                    $schemaName = $parts[0].Trim()
+                                    $tableName = $parts[1].Trim()
+
+                                    if ($schemaName.StartsWith('[') -and $schemaName.EndsWith(']') -and $schemaName.Length -ge 2) {
+                                        $schemaName = $schemaName.Substring(1, $schemaName.Length - 2).Replace(']]', ']')
+                                    }
+
+                                    if ($tableName.StartsWith('[') -and $tableName.EndsWith(']') -and $tableName.Length -ge 2) {
+                                        $tableName = $tableName.Substring(1, $tableName.Length - 2).Replace(']]', ']')
+                                    }
+                                }
+
+                                if ([string]::IsNullOrWhiteSpace($schemaName) -or [string]::IsNullOrWhiteSpace($tableName)) {
+                                    throw [System.InvalidOperationException]::new(("Configured table must include schema and table names: {0}" -f $Value))
+                                }
+
+                                return [PSCustomObject]@{
+                                    Schema = $schemaName
+                                    Table = $tableName
+                                    Normalized = ('{0}.{1}' -f $schemaName, $tableName)
+                                    Bracketed = ('{0}.{1}' -f (& $escapeSqlIdentifier -Value $schemaName), (& $escapeSqlIdentifier -Value $tableName))
+                                }
+                            }
+
+                            foreach ($configuredTable in $configuredTables) {
+                                try {
+                                    $parsedTable = & $parseConfiguredTable -Value $configuredTable
+                                }
+                                catch {
+                                    $referenceDataAnalysisLimited = $true
+                                    continue
+                                }
+
+                                $rowCount = $null
+                                if ($null -ne $connectionContext -and -not [string]::IsNullOrWhiteSpace($databaseName)) {
+                                    $countQuery = @"
+SELECT COUNT_BIG(1) AS RowCount
+FROM {0};
+"@ -f $parsedTable.Bracketed
+                                    $countResult = & $executeQuery -QueryText $countQuery
+                                    if ($null -ne $countResult -and $null -ne $countResult.Tables -and $countResult.Tables.Count -gt 0) {
+                                        $countRow = $countResult.Tables[0].Rows | Select-Object -First 1
+                                        if ($null -ne $countRow) {
+                                            try {
+                                                $rowCount = [long](& $getRowValue -Row $countRow -ColumnName 'RowCount')
+                                            }
+                                            catch {
+                                                $rowCount = $null
+                                            }
+                                        }
+                                    }
+                                    else {
+                                        $referenceDataAnalysisLimited = $true
+                                    }
+                                }
+                                else {
+                                    $referenceDataAnalysisLimited = $true
+                                }
+
+                                if ($null -eq $rowCount) {
+                                    continue
+                                }
+
+                                if ($rowCount -eq 0) {
+                                    $referenceDataCandidates.Add([PSCustomObject]@{
+                                        SectionName = 'Configured Tables'
+                                        CategoryOrder = '1'
+                                        ObjectType = 'TABLE'
+                                        ObjectName = $parsedTable.Normalized
+                                        Reason = 'Configured table contains zero rows.'
+                                        Note = $null
+                                    })
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        $referenceDataEmptyTables = @(
+            $referenceDataCandidates |
+                Sort-Object -Property ObjectType, ObjectName
+        )
+
+        $dependencyCandidateCount = @($dependencyCandidates).Count
+        $securityCandidateCount = @($securityCandidates).Count
+        $referenceDataCandidateCount = @($referenceDataEmptyTables).Count
+
+        Write-ExporterLog -Level Information -Message (("Dependency candidate count: {0}" -f $dependencyCandidateCount))
+        Write-ExporterLog -Level Information -Message (("Security candidate count: {0}" -f $securityCandidateCount))
+        Write-ExporterLog -Level Information -Message (("Reference data candidate count: {0}" -f $referenceDataCandidateCount))
+        Write-ExporterLog -Level Information -Message (("Output path: {0}" -f $reportPath))
+
+        $lines = [System.Collections.Generic.List[string]]::new()
+        $lines.Add('# Orphaned Object Analysis')
+        $lines.Add('')
+        $lines.Add('## Summary')
+        $lines.Add('')
+        $lines.Add(("- Dependency-Based Candidates: {0}" -f $dependencyCandidateCount))
+        $lines.Add(("- Security Candidates: {0}" -f $securityCandidateCount))
+        $lines.Add(("- Reference Data Candidates: {0}" -f $referenceDataCandidateCount))
+        $lines.Add('')
+        $lines.Add('## Important Review Note')
+        $lines.Add('')
+        $lines.Add('This report identifies review candidates only.')
+        $lines.Add('This report does not prove that an object is unused.')
+        $lines.Add('Objects may be referenced by applications, SQL Agent jobs, reports, scripts, SSIS packages, or other external systems.')
+        $lines.Add('Manual validation required before removal.')
+        $lines.Add('')
+
+        $lines.Add('## Dependency-Based Candidates')
+        $lines.Add('')
+        $lines.Add('### Potential Orphans')
+        $lines.Add('')
+        if ($dependencyPotentialOrphans.Count -eq 0) {
+            $lines.Add('None found.')
+            $lines.Add('')
+        }
+        else {
+            foreach ($candidate in $dependencyPotentialOrphans) {
+                $lines.Add(("- {0}" -f $candidate.ObjectName))
+                $lines.Add(("  - Type: {0}" -f $candidate.ObjectType))
+                $lines.Add(("  - Reason: {0}" -f $candidate.Reason))
+                if (-not [string]::IsNullOrWhiteSpace([string]$candidate.Note)) {
+                    $lines.Add(("  - Note: {0}" -f $candidate.Note))
+                }
+                $lines.Add('')
+            }
+        }
+
+        $lines.Add('### External Usage Unknown')
+        $lines.Add('')
+        if ($dependencyExternalUsageUnknown.Count -eq 0) {
+            $lines.Add('None found.')
+            $lines.Add('')
+        }
+        else {
+            foreach ($candidate in $dependencyExternalUsageUnknown) {
+                $lines.Add(("- {0}" -f $candidate.ObjectName))
+                $lines.Add(("  - Type: {0}" -f $candidate.ObjectType))
+                $lines.Add(("  - Reason: {0}" -f $candidate.Reason))
+                $lines.Add(("  - Note: {0}" -f $candidate.Note))
+                $lines.Add('')
+            }
+        }
+
+        $lines.Add('## Security Candidates')
+        $lines.Add('')
+        $lines.Add('Security usage may require manual review.')
+        if ($securityAnalysisLimited) {
+            $lines.Add('Security analysis is limited to metadata available in the current database.')
+        }
+        $lines.Add('')
+
+        $lines.Add('### Roles')
+        $lines.Add('')
+        if ($securityRoles.Count -eq 0) {
+            $lines.Add('None found.')
+            $lines.Add('')
+        }
+        else {
+            foreach ($candidate in $securityRoles) {
+                $lines.Add(("- {0}" -f $candidate.ObjectName))
+                $lines.Add(("  - Type: {0}" -f $candidate.ObjectType))
+                $lines.Add(("  - Reason: {0}" -f $candidate.Reason))
+                $lines.Add('')
+            }
+        }
+
+        $lines.Add('### Users')
+        $lines.Add('')
+        if ($securityUsers.Count -eq 0) {
+            $lines.Add('None found.')
+            $lines.Add('')
+        }
+        else {
+            foreach ($candidate in $securityUsers) {
+                $lines.Add(("- {0}" -f $candidate.ObjectName))
+                $lines.Add(("  - Type: {0}" -f $candidate.ObjectType))
+                $lines.Add(("  - Reason: {0}" -f $candidate.Reason))
+                $lines.Add('')
+            }
+        }
+
+        $lines.Add('## Reference Data Candidates')
+        $lines.Add('')
+        if ($referenceDataAnalysisPerformed) {
+            if ($referenceDataAnalysisLimited) {
+                $lines.Add('Reference data analysis is limited to configured tables available in the current database.')
+                $lines.Add('')
+            }
+
+            if ($referenceDataEmptyTables.Count -eq 0) {
+                $lines.Add('None found.')
+                $lines.Add('')
+            }
+            else {
+                foreach ($candidate in $referenceDataEmptyTables) {
+                    $lines.Add(("- {0}" -f $candidate.ObjectName))
+                    $lines.Add(("  - Type: {0}" -f $candidate.ObjectType))
+                    $lines.Add(("  - Reason: {0}" -f $candidate.Reason))
+                    $lines.Add('')
+                }
+            }
+        }
+        else {
+            $lines.Add('Reference data analysis was not performed.')
+            $lines.Add('')
+        }
+
+        $lines.Add('## Recommended Review Actions')
+        $lines.Add('')
+        $lines.Add('- Verify usage through application code.')
+        $lines.Add('- Review SQL Agent jobs.')
+        $lines.Add('- Review reporting tools.')
+        $lines.Add('- Review deployment scripts.')
+        $lines.Add('- Confirm with business or application owners before removal.')
+
+        if ($dependencyCandidateCount -eq 0 -and $securityCandidateCount -eq 0 -and $referenceDataCandidateCount -eq 0) {
+            $lines.Add('')
+            $lines.Add('No candidates were found.')
+        }
+
+        $reportContent = [string]::Join([Environment]::NewLine, $lines)
+        if (-not $reportContent.EndsWith([Environment]::NewLine)) {
+            $reportContent += [Environment]::NewLine
+        }
+
+        [System.IO.File]::WriteAllText($reportPath, $reportContent, [System.Text.UTF8Encoding]::new($false))
+
+        Write-ExporterLog -Level Information -Message 'Analysis completed'
+
+        return [PSCustomObject]@{
+            DependencyCandidateCount = $dependencyCandidateCount
+            SecurityCandidateCount = $securityCandidateCount
+            ReferenceDataCandidateCount = $referenceDataCandidateCount
+            ReportPath = $reportPath
+        }
+    }
+    catch {
+        Write-ExporterLog -Level Error -Message ('Orphaned object analysis failed: {0}' -f $_.Exception.Message) -ErrorAction Continue
+        throw [System.InvalidOperationException]::new(('Failed to export orphaned objects report. {0}' -f $_.Exception.Message))
+    }
+}
+#endregion
+
 #region Dependency Functions
 function Get-GraphvizDotPath {
     <#
